@@ -53,6 +53,36 @@
 - 重复关闭同一支付单直接返回当前结果（`200`），不报错也不重复写入。
 - 其他不允许的状态变化返回 `409 ILLEGAL_STATE_TRANSITION`；支付单不存在返回 `404`。
 
+### 支付结果通知
+
+`POST /api/payment-notifications`
+
+支付渠道通过该接口回传支付单的处理结果。
+
+- 请求头：
+  - `X-Timestamp`（必填）：ISO-8601 格式的时间戳，如 `2026-09-20T12:00:00Z`，与服务器当前时间相差超过 5 分钟视为过期。
+  - `X-Signature`（必填）：签名，小写十六进制字符串。
+- 请求体：
+
+      {"eventId": "evt-001", "paymentNo": "PO...", "result": "SUCCESS", "occurredAt": "2026-09-20T12:00:00Z"}
+
+  `result` 只允许 `SUCCESS` 或 `FAILED`。
+- 签名计算：以配置项 `payment.notification-secret` 为密钥，对 `X-Timestamp`、一个换行符 `\n`、原始请求体依次拼接后的内容计算 HMAC-SHA256，结果转为小写十六进制：
+
+      signature = lowercase_hex(HMAC_SHA256(secret, X-Timestamp + "\n" + rawBody))
+
+- 签名校验失败返回 `401 INVALID_NOTIFICATION_SIGNATURE`；时间戳缺失、格式错误或已过期返回 `401 INVALID_NOTIFICATION_TIMESTAMP`。签名比较使用恒定时间比较，避免时序攻击。
+- 处理成功返回 `200` 及最新的支付单 JSON。
+- 幂等语义：`eventId` 是渠道事件的唯一标识（数据库唯一约束）。同一 `eventId` 且通知内容完全一致时，直接返回第一次处理后的结果，不重复修改支付单；同一 `eventId` 内容不一致时返回 `409 NOTIFICATION_EVENT_CONFLICT`。
+- 状态约束：仅 `PENDING` 状态可首次变为 `SUCCESS` 或 `FAILED`；已是 `SUCCESS`/`FAILED` 时收到相同结果直接返回当前结果，收到相反结果返回 `409 ILLEGAL_STATE_TRANSITION`；`CLOSED` 状态收到任何支付结果都返回 `409 ILLEGAL_STATE_TRANSITION`。并发到达的相反结果只有一个生效，另一个返回 `409`。
+- 支付单不存在返回 `404 PAYMENT_ORDER_NOT_FOUND`；参数不合法返回 `400 VALIDATION_ERROR`。
+
+## 配置说明
+
+- `payment.notification-secret`：支付结果通知的 HMAC-SHA256 签名密钥。本地开发默认值为 `dev-notification-secret`，生产环境必须通过环境变量 `PAYMENT_NOTIFICATION_SECRET` 覆盖。
+
 ## 数据模型
 
-支付单表 `payment_orders`：`payment_no`、`idempotency_key`、`merchant_order_no` 均有数据库唯一约束，`status` 当前支持 `PENDING`、`CLOSED`。
+支付单表 `payment_orders`：`payment_no`、`idempotency_key`、`merchant_order_no` 均有数据库唯一约束，`status` 支持 `PENDING`、`SUCCESS`、`FAILED`、`CLOSED`。
+
+支付通知表 `payment_notifications`：`event_id` 有数据库唯一约束，记录 `payment_no`、`result`、`occurred_at` 及请求内容指纹，用于通知幂等与冲突检测。

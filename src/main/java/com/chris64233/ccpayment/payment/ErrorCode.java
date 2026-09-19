@@ -10,6 +10,9 @@ public enum ErrorCode {
     IDEMPOTENCY_KEY_CONFLICT(HttpStatus.CONFLICT, "同一幂等键对应的请求内容不一致"),
     DUPLICATE_MERCHANT_ORDER_NO(HttpStatus.CONFLICT, "商户订单号已存在"),
     ILLEGAL_STATE_TRANSITION(HttpStatus.CONFLICT, "当前状态不允许该操作"),
+    INVALID_NOTIFICATION_TIMESTAMP(HttpStatus.UNAUTHORIZED, "通知时间戳不合法或已过期"),
+    INVALID_NOTIFICATION_SIGNATURE(HttpStatus.UNAUTHORIZED, "通知签名校验失败"),
+    NOTIFICATION_EVENT_CONFLICT(HttpStatus.CONFLICT, "同一事件对应的通知内容不一致"),
     INTERNAL_ERROR(HttpStatus.INTERNAL_SERVER_ERROR, "系统内部错误");
 
     private final HttpStatus status;

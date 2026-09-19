@@ -113,4 +113,9 @@ public class PaymentOrder {
         this.status = PaymentOrderStatus.CLOSED;
         this.updatedAt = Instant.now();
     }
+
+    public void applyResult(PaymentOrderStatus result) {
+        this.status = result;
+        this.updatedAt = Instant.now();
+    }
 }
