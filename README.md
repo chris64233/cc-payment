@@ -1,6 +1,6 @@
 # cc-payment
 
-支付业务后端项目，当前提供支付单的创建、查询和关闭能力。
+支付业务后端项目，当前提供支付单的创建、查询、关闭以及支付结果通知（渠道回调）能力。
 
 ## 开发环境
 
@@ -53,6 +53,43 @@
 - 重复关闭同一支付单直接返回当前结果（`200`），不报错也不重复写入。
 - 其他不允许的状态变化返回 `409 ILLEGAL_STATE_TRANSITION`；支付单不存在返回 `404`。
 
+### 支付结果通知（渠道回调）
+
+`POST /api/payment-notifications`
+
+- 请求头：
+  - `X-Timestamp`（必填）：Unix 毫秒时间戳，与服务器当前时间相差超过 5 分钟将被拒绝。
+  - `X-Signature`（必填）：签名，计算方式见下文。
+- 请求体：
+
+      {"eventId": "evt-001", "paymentNo": "PO...", "result": "SUCCESS", "occurredAt": "2026-09-20T10:00:00Z"}
+
+  `result` 只允许 `SUCCESS` 或 `FAILED`。
+- 处理成功返回 `200` 及最新的支付单 JSON。
+- 状态机：仅 `PENDING` 可首次变为 `SUCCESS` / `FAILED`；已是 `SUCCESS` / `FAILED` 时收到相同结果直接返回当前结果，收到相反结果返回 `409 ILLEGAL_STATE_TRANSITION`；`CLOSED` 收到任何支付结果返回 `409`。并发到达的相反结果只有一个生效，另一个返回 `409`。
+- 事件幂等：`eventId` 是渠道事件的唯一标识（数据库唯一约束）。同一 `eventId` 且通知内容完全相同时，直接返回第一次处理后的结果，不重复修改支付单；同一 `eventId` 内容不一致时返回 `409 NOTIFICATION_EVENT_CONFLICT`。
+- 支付单不存在返回 `404 PAYMENT_ORDER_NOT_FOUND`。
+
+#### 签名计算
+
+1. 将 `X-Timestamp` 的值、一个换行符 `\n`、原始请求体（未经任何格式化）依次拼接。
+2. 以配置项 `payment.notification-secret` 为密钥，对拼接内容计算 HMAC-SHA256。
+3. 结果转为小写十六进制字符串，放入 `X-Signature` 请求头。
+
+示例（伪代码）：
+
+    signature = lowercaseHex(HMAC_SHA256(secret, timestamp + "\n" + rawBody))
+
+签名校验使用恒定时间比较。签名不正确返回 `401 INVALID_NOTIFICATION_SIGNATURE`；时间戳格式错误或超过允许的 5 分钟偏差返回 `401 INVALID_NOTIFICATION_TIMESTAMP`。
+
+## 配置说明
+
+| 配置项 | 说明 |
+| --- | --- |
+| `payment.notification-secret` | 支付结果通知的 HMAC-SHA256 签名密钥，生产环境务必替换默认值 |
+
 ## 数据模型
 
-支付单表 `payment_orders`：`payment_no`、`idempotency_key`、`merchant_order_no` 均有数据库唯一约束，`status` 当前支持 `PENDING`、`CLOSED`。
+支付单表 `payment_orders`：`payment_no`、`idempotency_key`、`merchant_order_no` 均有数据库唯一约束，`status` 支持 `PENDING`、`SUCCESS`、`FAILED`、`CLOSED`。
+
+通知事件表 `payment_notification_events`：`event_id` 有数据库唯一约束，记录 `payment_no`、`result`、`occurred_at`、通知内容摘要 `payload_hash` 和处理时间 `processed_at`，用于事件幂等与冲突检测。
