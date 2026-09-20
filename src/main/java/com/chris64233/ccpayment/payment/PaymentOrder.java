@@ -52,6 +52,9 @@ public class PaymentOrder {
     @Column(name = "status", nullable = false, length = 16)
     private PaymentOrderStatus status;
 
+    @Column(name = "expires_at", nullable = false)
+    private Instant expiresAt;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
 
@@ -62,7 +65,7 @@ public class PaymentOrder {
     }
 
     public PaymentOrder(String paymentNo, String idempotencyKey, String requestFingerprint,
-                        String merchantOrderNo, BigDecimal amount, String currency) {
+                        String merchantOrderNo, BigDecimal amount, String currency, Instant expiresAt) {
         this.paymentNo = paymentNo;
         this.idempotencyKey = idempotencyKey;
         this.requestFingerprint = requestFingerprint;
@@ -71,6 +74,7 @@ public class PaymentOrder {
         this.refundedAmount = BigDecimal.ZERO;
         this.currency = currency;
         this.status = PaymentOrderStatus.PENDING;
+        this.expiresAt = expiresAt;
         this.createdAt = Instant.now();
         this.updatedAt = this.createdAt;
     }
@@ -109,6 +113,10 @@ public class PaymentOrder {
 
     public PaymentOrderStatus getStatus() {
         return status;
+    }
+
+    public Instant getExpiresAt() {
+        return expiresAt;
     }
 
     public Instant getCreatedAt() {

@@ -38,8 +38,9 @@ public class PaymentNotificationProcessor {
         if (status == PaymentOrderStatus.PENDING) {
             order.applyResult(request.result());
         } else if (status == PaymentOrderStatus.CLOSED
+                || status == PaymentOrderStatus.EXPIRED
                 || status != request.result().toStatus()) {
-            // CLOSED 收到任何支付结果、或终态收到相反结果，均不允许
+            // CLOSED / EXPIRED 收到任何支付结果、或终态收到相反结果，均不允许
             throw new PaymentException(ErrorCode.ILLEGAL_STATE_TRANSITION);
         }
         // 终态收到相同结果：直接返回当前结果，仅记录事件

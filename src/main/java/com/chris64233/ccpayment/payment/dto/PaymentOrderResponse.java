@@ -13,6 +13,7 @@ public record PaymentOrderResponse(
         BigDecimal refundedAmount,
         String currency,
         PaymentOrderStatus status,
+        Instant expiresAt,
         Instant createdAt,
         Instant updatedAt
 ) {
@@ -25,6 +26,7 @@ public record PaymentOrderResponse(
                 order.getRefundedAmount(),
                 order.getCurrency(),
                 order.getStatus(),
+                order.getExpiresAt(),
                 order.getCreatedAt(),
                 order.getUpdatedAt()
         );
