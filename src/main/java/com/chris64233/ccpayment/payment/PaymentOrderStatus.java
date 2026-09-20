@@ -4,5 +4,7 @@ public enum PaymentOrderStatus {
     PENDING,
     SUCCESS,
     FAILED,
-    CLOSED
+    CLOSED,
+    PARTIALLY_REFUNDED,
+    REFUNDED
 }

@@ -1,6 +1,6 @@
 # cc-payment
 
-支付业务后端项目，当前提供支付单的创建、查询、关闭以及支付结果通知（渠道回调）能力。
+支付业务后端项目，当前提供支付单的创建、查询、关闭、支付结果通知（渠道回调）以及支付单退款能力。
 
 ## 开发环境
 
@@ -53,6 +53,29 @@
 - 重复关闭同一支付单直接返回当前结果（`200`），不报错也不重复写入。
 - 其他不允许的状态变化返回 `409 ILLEGAL_STATE_TRANSITION`；支付单不存在返回 `404`。
 
+### 创建退款
+
+`POST /api/payment-orders/{paymentNo}/refunds`
+
+- 请求头：`Idempotency-Key`（必填，幂等键）
+- 请求体：
+
+      {"merchantRefundNo": "R20260920001", "amount": 30.00}
+
+- 校验规则：`amount` 必须大于 0 且最多两位小数，不合法返回 `400 VALIDATION_ERROR`；`merchantRefundNo` 全局唯一，重复返回 `409 DUPLICATE_MERCHANT_REFUND_NO`。
+- 受理成功返回 `201` 及退款单 JSON（`refundNo`、`merchantRefundNo`、`paymentNo`、`amount`、`status`、`createdAt`），本轮退款受理成功后状态即为 `SUCCEEDED`。
+- 仅 `SUCCESS` 和 `PARTIALLY_REFUNDED` 状态的支付单允许退款；`PENDING`、`FAILED`、`CLOSED`、`REFUNDED` 状态返回 `409 ILLEGAL_STATE_TRANSITION`。
+- 每次退款成功后更新支付单累计退款金额 `refundedAmount`：累计金额小于原支付金额时支付单状态变为 `PARTIALLY_REFUNDED`，等于原支付金额时变为 `REFUNDED`。累计退款金额不能超过原支付金额，超出返回 `409 REFUND_AMOUNT_EXCEEDED`。
+- 并发控制：对支付单行加悲观写锁，同一支付单的并发退款串行执行，保证累计退款金额不会超额（允许一个成功、另一个因余额不足返回 `409`）。
+- 幂等语义：同一 `Idempotency-Key`、相同支付单且请求内容一致时，返回第一次创建的退款单，不重复累计退款金额；同一幂等键对应的支付单或请求内容不一致时返回 `409 IDEMPOTENCY_KEY_CONFLICT`。
+- 支付单不存在返回 `404 PAYMENT_ORDER_NOT_FOUND`；缺少幂等键返回 `400 MISSING_IDEMPOTENCY_KEY`。
+
+### 查询退款单
+
+`GET /api/refunds/{refundNo}`
+
+- 成功返回 `200` 及退款单 JSON；不存在返回 `404 REFUND_NOT_FOUND`。
+
 ### 支付结果通知（渠道回调）
 
 `POST /api/payment-notifications`
@@ -90,6 +113,8 @@
 
 ## 数据模型
 
-支付单表 `payment_orders`：`payment_no`、`idempotency_key`、`merchant_order_no` 均有数据库唯一约束，`status` 支持 `PENDING`、`SUCCESS`、`FAILED`、`CLOSED`。
+支付单表 `payment_orders`：`payment_no`、`idempotency_key`、`merchant_order_no` 均有数据库唯一约束，`status` 支持 `PENDING`、`SUCCESS`、`FAILED`、`CLOSED`、`PARTIALLY_REFUNDED`、`REFUNDED`，`refunded_amount` 记录累计退款金额。
+
+退款单表 `refunds`：`refund_no`、`idempotency_key`、`merchant_refund_no` 均有数据库唯一约束，记录原支付单号 `payment_no`、退款金额 `amount`、状态 `status`（`SUCCEEDED`）、请求内容摘要 `request_fingerprint` 和创建时间 `created_at`，用于退款幂等与冲突检测。
 
 通知事件表 `payment_notification_events`：`event_id` 有数据库唯一约束，记录 `payment_no`、`result`、`occurred_at`、通知内容摘要 `payload_hash` 和处理时间 `processed_at`，用于事件幂等与冲突检测。

@@ -40,6 +40,9 @@ public class PaymentOrder {
     @Column(name = "amount", nullable = false, precision = 19, scale = 2)
     private BigDecimal amount;
 
+    @Column(name = "refunded_amount", nullable = false, precision = 19, scale = 2)
+    private BigDecimal refundedAmount;
+
     @Column(name = "currency", nullable = false, length = 3)
     private String currency;
 
@@ -63,6 +66,7 @@ public class PaymentOrder {
         this.requestFingerprint = requestFingerprint;
         this.merchantOrderNo = merchantOrderNo;
         this.amount = amount;
+        this.refundedAmount = BigDecimal.ZERO.setScale(2);
         this.currency = currency;
         this.status = PaymentOrderStatus.PENDING;
         this.createdAt = Instant.now();
@@ -93,6 +97,10 @@ public class PaymentOrder {
         return amount;
     }
 
+    public BigDecimal getRefundedAmount() {
+        return refundedAmount;
+    }
+
     public String getCurrency() {
         return currency;
     }
@@ -116,6 +124,14 @@ public class PaymentOrder {
 
     public void applyResult(PaymentResult result) {
         this.status = result.toStatus();
+        this.updatedAt = Instant.now();
+    }
+
+    public void applyRefund(BigDecimal refundAmount) {
+        this.refundedAmount = this.refundedAmount.add(refundAmount);
+        this.status = this.refundedAmount.compareTo(this.amount) == 0
+                ? PaymentOrderStatus.REFUNDED
+                : PaymentOrderStatus.PARTIALLY_REFUNDED;
         this.updatedAt = Instant.now();
     }
 }
