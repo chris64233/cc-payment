@@ -9,6 +9,7 @@ import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
 import jakarta.persistence.UniqueConstraint;
+import org.hibernate.annotations.ColumnDefault;
 
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -40,6 +41,10 @@ public class PaymentOrder {
     @Column(name = "amount", nullable = false, precision = 19, scale = 2)
     private BigDecimal amount;
 
+    @ColumnDefault("0")
+    @Column(name = "refunded_amount", nullable = false, precision = 19, scale = 2)
+    private BigDecimal refundedAmount;
+
     @Column(name = "currency", nullable = false, length = 3)
     private String currency;
 
@@ -63,6 +68,7 @@ public class PaymentOrder {
         this.requestFingerprint = requestFingerprint;
         this.merchantOrderNo = merchantOrderNo;
         this.amount = amount;
+        this.refundedAmount = BigDecimal.ZERO;
         this.currency = currency;
         this.status = PaymentOrderStatus.PENDING;
         this.createdAt = Instant.now();
@@ -93,6 +99,10 @@ public class PaymentOrder {
         return amount;
     }
 
+    public BigDecimal getRefundedAmount() {
+        return refundedAmount;
+    }
+
     public String getCurrency() {
         return currency;
     }
@@ -111,6 +121,19 @@ public class PaymentOrder {
 
     public void close() {
         this.status = PaymentOrderStatus.CLOSED;
+        this.updatedAt = Instant.now();
+    }
+
+    public boolean isRefundable() {
+        return status == PaymentOrderStatus.SUCCESS
+                || status == PaymentOrderStatus.PARTIALLY_REFUNDED;
+    }
+
+    public void applyRefund(BigDecimal refundAmount) {
+        this.refundedAmount = this.refundedAmount.add(refundAmount);
+        this.status = this.refundedAmount.compareTo(this.amount) < 0
+                ? PaymentOrderStatus.PARTIALLY_REFUNDED
+                : PaymentOrderStatus.REFUNDED;
         this.updatedAt = Instant.now();
     }
 
