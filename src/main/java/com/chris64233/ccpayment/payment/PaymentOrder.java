@@ -55,6 +55,9 @@ public class PaymentOrder {
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
 
+    @Column(name = "expired_at", nullable = false)
+    private Instant expiredAt;
+
     @Column(name = "updated_at", nullable = false)
     private Instant updatedAt;
 
@@ -62,7 +65,8 @@ public class PaymentOrder {
     }
 
     public PaymentOrder(String paymentNo, String idempotencyKey, String requestFingerprint,
-                        String merchantOrderNo, BigDecimal amount, String currency) {
+                        String merchantOrderNo, BigDecimal amount, String currency,
+                        Instant createdAt, Instant expiredAt) {
         this.paymentNo = paymentNo;
         this.idempotencyKey = idempotencyKey;
         this.requestFingerprint = requestFingerprint;
@@ -71,7 +75,8 @@ public class PaymentOrder {
         this.refundedAmount = BigDecimal.ZERO;
         this.currency = currency;
         this.status = PaymentOrderStatus.PENDING;
-        this.createdAt = Instant.now();
+        this.createdAt = createdAt;
+        this.expiredAt = expiredAt;
         this.updatedAt = this.createdAt;
     }
 
@@ -113,6 +118,10 @@ public class PaymentOrder {
 
     public Instant getCreatedAt() {
         return createdAt;
+    }
+
+    public Instant getExpiredAt() {
+        return expiredAt;
     }
 
     public Instant getUpdatedAt() {

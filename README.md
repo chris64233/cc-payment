@@ -36,14 +36,21 @@
 
 - 校验规则：`amount` 必须大于 0 且最多两位小数；`currency` 必须是三位大写字母；`merchantOrderNo` 全局唯一。
 - 幂等语义：同一 `Idempotency-Key` 且请求内容一致时，返回第一次创建的支付单，不新增数据；同一幂等键请求内容不一致时返回 `409 IDEMPOTENCY_KEY_CONFLICT`。
-- 成功返回 `201` 及支付单 JSON（`paymentNo`、`merchantOrderNo`、`amount`、`refundedAmount`、`currency`、`status`、`createdAt`、`updatedAt`），其中 `refundedAmount` 为累计退款金额，初始为 0。
+- 成功返回 `201` 及支付单 JSON（`paymentNo`、`merchantOrderNo`、`amount`、`refundedAmount`、`currency`、`status`、`createdAt`、`expiredAt`、`updatedAt`），其中 `refundedAmount` 为累计退款金额，初始为 0；`expiredAt` 为支付单过期时间，等于创建时间加上配置的有效期（默认 30 分钟）。
 - 商户订单号重复返回 `409 DUPLICATE_MERCHANT_ORDER_NO`；参数不合法返回 `400 VALIDATION_ERROR`；缺少幂等键返回 `400 MISSING_IDEMPOTENCY_KEY`。
 
 ### 查询支付单
 
 `GET /api/payment-orders/{paymentNo}`
 
-- 成功返回 `200` 及支付单 JSON；不存在返回 `404 PAYMENT_ORDER_NOT_FOUND`。
+- 成功返回 `200` 及支付单 JSON（含 `expiredAt` 过期时间）；不存在返回 `404 PAYMENT_ORDER_NOT_FOUND`。
+
+### 支付单超时关闭
+
+- 创建支付单时按配置项 `payment.order-expiration`（默认 `30m`）计算过期时间 `expiredAt = createdAt + 有效期`。
+- 后台定时任务按配置项 `payment.expiration-check-interval`（默认 `60s`）周期性扫描：所有 `expiredAt` 早于或等于当前时间且状态为 `PENDING` 的支付单被批量置为 `EXPIRED`，并刷新 `updatedAt`。
+- 未到期的支付单以及 `SUCCESS`、`FAILED`、`CLOSED`、`REFUNDED` 等其他状态的支付单不会被修改；任务重复执行不会产生额外状态变化（幂等）。
+- `EXPIRED` 是终态：不能再接收支付结果通知（返回 `409 PAYMENT_ORDER_EXPIRED`），也不能再关闭或退款。
 
 ### 关闭支付单
 
@@ -89,7 +96,7 @@
 
   `result` 只允许 `SUCCESS` 或 `FAILED`。
 - 处理成功返回 `200` 及最新的支付单 JSON。
-- 状态机：仅 `PENDING` 可首次变为 `SUCCESS` / `FAILED`；已是 `SUCCESS` / `FAILED` 时收到相同结果直接返回当前结果，收到相反结果返回 `409 ILLEGAL_STATE_TRANSITION`；`CLOSED` 收到任何支付结果返回 `409`。并发到达的相反结果只有一个生效，另一个返回 `409`。
+- 状态机：仅 `PENDING` 可首次变为 `SUCCESS` / `FAILED`；已是 `SUCCESS` / `FAILED` 时收到相同结果直接返回当前结果，收到相反结果返回 `409 ILLEGAL_STATE_TRANSITION`；`CLOSED` 收到任何支付结果返回 `409`；`EXPIRED` 收到任何支付结果返回 `409 PAYMENT_ORDER_EXPIRED`。并发到达的相反结果只有一个生效，另一个返回 `409`。
 - 事件幂等：`eventId` 是渠道事件的唯一标识（数据库唯一约束）。同一 `eventId` 且通知内容完全相同时，直接返回第一次处理后的结果，不重复修改支付单；同一 `eventId` 内容不一致时返回 `409 NOTIFICATION_EVENT_CONFLICT`。
 - 支付单不存在返回 `404 PAYMENT_ORDER_NOT_FOUND`。
 
@@ -110,10 +117,12 @@
 | 配置项 | 说明 |
 | --- | --- |
 | `payment.notification-secret` | 支付结果通知的 HMAC-SHA256 签名密钥，生产环境务必替换默认值 |
+| `payment.order-expiration` | 支付单有效期，创建时据此计算 `expiredAt`，默认 `30m` |
+| `payment.expiration-check-interval` | 到期支付单扫描任务的执行间隔，默认 `60s` |
 
 ## 数据模型
 
-支付单表 `payment_orders`：`payment_no`、`idempotency_key`、`merchant_order_no` 均有数据库唯一约束，`status` 支持 `PENDING`、`SUCCESS`、`FAILED`、`CLOSED`、`PARTIALLY_REFUNDED`、`REFUNDED`，`refunded_amount` 记录累计退款金额。
+支付单表 `payment_orders`：`payment_no`、`idempotency_key`、`merchant_order_no` 均有数据库唯一约束，`status` 支持 `PENDING`、`SUCCESS`、`FAILED`、`CLOSED`、`EXPIRED`、`PARTIALLY_REFUNDED`、`REFUNDED`，`refunded_amount` 记录累计退款金额，`expired_at` 记录支付单过期时间。
 
 退款单表 `payment_refunds`：`refund_no`、`idempotency_key`、`merchant_refund_no` 均有数据库唯一约束，记录 `payment_no`、`amount`、`request_fingerprint`（幂等内容摘要）、`status`（`SUCCEEDED`）和 `created_at`。
 

@@ -14,6 +14,7 @@ public record PaymentOrderResponse(
         String currency,
         PaymentOrderStatus status,
         Instant createdAt,
+        Instant expiredAt,
         Instant updatedAt
 ) {
 
@@ -26,6 +27,7 @@ public record PaymentOrderResponse(
                 order.getCurrency(),
                 order.getStatus(),
                 order.getCreatedAt(),
+                order.getExpiredAt(),
                 order.getUpdatedAt()
         );
     }

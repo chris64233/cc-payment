@@ -2,6 +2,7 @@ package com.chris64233.ccpayment.payment;
 
 import com.chris64233.ccpayment.payment.dto.CreatePaymentOrderRequest;
 import com.chris64233.ccpayment.payment.dto.PaymentOrderResponse;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -9,6 +10,9 @@ import org.springframework.transaction.annotation.Transactional;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.time.Clock;
+import java.time.Duration;
+import java.time.Instant;
 import java.util.HexFormat;
 import java.util.UUID;
 
@@ -16,9 +20,15 @@ import java.util.UUID;
 public class PaymentOrderService {
 
     private final PaymentOrderRepository repository;
+    private final Clock clock;
+    private final Duration orderExpiration;
 
-    public PaymentOrderService(PaymentOrderRepository repository) {
+    public PaymentOrderService(PaymentOrderRepository repository,
+                               Clock clock,
+                               @Value("${payment.order-expiration:30m}") Duration orderExpiration) {
         this.repository = repository;
+        this.clock = clock;
+        this.orderExpiration = orderExpiration;
     }
 
     public PaymentOrderResponse create(String idempotencyKey, CreatePaymentOrderRequest request) {
@@ -29,13 +39,16 @@ public class PaymentOrderService {
     }
 
     private PaymentOrderResponse insertNew(String idempotencyKey, CreatePaymentOrderRequest request, String fingerprint) {
+        Instant now = Instant.now(clock);
         PaymentOrder order = new PaymentOrder(
                 generatePaymentNo(),
                 idempotencyKey,
                 fingerprint,
                 request.merchantOrderNo(),
                 request.amount(),
-                request.currency()
+                request.currency(),
+                now,
+                now.plus(orderExpiration)
         );
         try {
             return PaymentOrderResponse.from(repository.saveAndFlush(order));

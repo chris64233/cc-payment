@@ -35,6 +35,10 @@ public class PaymentNotificationProcessor {
         }
 
         PaymentOrderStatus status = order.getStatus();
+        if (status == PaymentOrderStatus.EXPIRED) {
+            // 已过期的支付单不再接收任何支付结果
+            throw new PaymentException(ErrorCode.PAYMENT_ORDER_EXPIRED);
+        }
         if (status == PaymentOrderStatus.PENDING) {
             order.applyResult(request.result());
         } else if (status == PaymentOrderStatus.CLOSED

@@ -10,6 +10,7 @@ public enum ErrorCode {
     IDEMPOTENCY_KEY_CONFLICT(HttpStatus.CONFLICT, "同一幂等键对应的请求内容不一致"),
     DUPLICATE_MERCHANT_ORDER_NO(HttpStatus.CONFLICT, "商户订单号已存在"),
     ILLEGAL_STATE_TRANSITION(HttpStatus.CONFLICT, "当前状态不允许该操作"),
+    PAYMENT_ORDER_EXPIRED(HttpStatus.CONFLICT, "支付单已过期，无法接收支付结果"),
     REFUND_NOT_FOUND(HttpStatus.NOT_FOUND, "退款单不存在"),
     PAYMENT_ORDER_NOT_REFUNDABLE(HttpStatus.CONFLICT, "当前支付单状态不允许退款"),
     REFUND_AMOUNT_EXCEEDED(HttpStatus.CONFLICT, "累计退款金额超过原支付金额"),
