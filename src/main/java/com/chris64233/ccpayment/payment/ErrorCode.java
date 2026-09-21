@@ -20,6 +20,9 @@ public enum ErrorCode {
     NOTIFICATION_EVENT_CONFLICT(HttpStatus.CONFLICT, "同一事件对应的通知内容不一致"),
     RECONCILIATION_BATCH_CONTENT_CONFLICT(HttpStatus.CONFLICT, "同一渠道和账务日期的对账内容与已提交批次不一致"),
     RECONCILIATION_BATCH_NOT_FOUND(HttpStatus.NOT_FOUND, "对账批次不存在"),
+    RECONCILIATION_LINE_NOT_FOUND(HttpStatus.NOT_FOUND, "对账明细不存在"),
+    RECONCILIATION_LINE_NOT_RESOLVABLE(HttpStatus.CONFLICT, "匹配成功的对账明细不能提交差异处理"),
+    RECONCILIATION_RESOLUTION_CONFLICT(HttpStatus.CONFLICT, "差异已处理，处理结论与已保存结果不一致"),
     INTERNAL_ERROR(HttpStatus.INTERNAL_SERVER_ERROR, "系统内部错误");
 
     private final HttpStatus status;

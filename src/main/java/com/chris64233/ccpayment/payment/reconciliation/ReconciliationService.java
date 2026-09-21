@@ -5,7 +5,9 @@ import com.chris64233.ccpayment.payment.PaymentException;
 import com.chris64233.ccpayment.payment.reconciliation.dto.ReconciliationBatchDetailResponse;
 import com.chris64233.ccpayment.payment.reconciliation.dto.ReconciliationBatchResponse;
 import com.chris64233.ccpayment.payment.reconciliation.dto.ReconciliationDetailRequest;
+import com.chris64233.ccpayment.payment.reconciliation.dto.ReconciliationLineResponse;
 import com.chris64233.ccpayment.payment.reconciliation.dto.ReconciliationSubmissionRequest;
+import com.chris64233.ccpayment.payment.reconciliation.dto.ResolveDiscrepancyRequest;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -71,6 +73,11 @@ public class ReconciliationService {
         return batchRepository.findByBatchNo(batchNo)
                 .map(ReconciliationBatchDetailResponse::from)
                 .orElseThrow(() -> new PaymentException(ErrorCode.RECONCILIATION_BATCH_NOT_FOUND));
+    }
+
+    public ReconciliationLineResponse resolve(String batchNo, String channelTxnNo,
+                                              ResolveDiscrepancyRequest request) {
+        return processor.resolve(batchNo, channelTxnNo, request);
     }
 
     private void validateBatch(List<ReconciliationDetailRequest> details) {

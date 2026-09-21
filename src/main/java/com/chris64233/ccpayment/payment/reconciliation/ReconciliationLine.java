@@ -17,6 +17,7 @@ import jakarta.persistence.Table;
 import jakarta.persistence.UniqueConstraint;
 
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -67,6 +68,19 @@ public class ReconciliationLine {
     @Column(name = "discrepancy_type", nullable = false, length = 32)
     private List<ReconciliationDiscrepancyType> discrepancies = new ArrayList<>();
 
+    @Enumerated(EnumType.STRING)
+    @Column(name = "resolution", length = 16)
+    private ReconciliationResolution resolution;
+
+    @Column(name = "resolved_by", length = 64)
+    private String resolvedBy;
+
+    @Column(name = "resolution_comment", length = 200)
+    private String resolutionComment;
+
+    @Column(name = "resolved_at")
+    private Instant resolvedAt;
+
     protected ReconciliationLine() {
     }
 
@@ -87,6 +101,26 @@ public class ReconciliationLine {
 
     void attachTo(ReconciliationBatch batch) {
         this.batch = batch;
+    }
+
+    public boolean isResolved() {
+        return resolution != null;
+    }
+
+    public boolean resolutionMatches(ReconciliationResolution resolution, String resolvedBy,
+                                     String resolutionComment) {
+        return isResolved()
+                && this.resolution == resolution
+                && this.resolvedBy.equals(resolvedBy)
+                && this.resolutionComment.equals(resolutionComment);
+    }
+
+    public void resolve(ReconciliationResolution resolution, String resolvedBy,
+                        String resolutionComment, Instant resolvedAt) {
+        this.resolution = resolution;
+        this.resolvedBy = resolvedBy;
+        this.resolutionComment = resolutionComment;
+        this.resolvedAt = resolvedAt;
     }
 
     public Long getId() {
@@ -119,6 +153,22 @@ public class ReconciliationLine {
 
     public List<ReconciliationDiscrepancyType> getDiscrepancies() {
         return discrepancies;
+    }
+
+    public ReconciliationResolution getResolution() {
+        return resolution;
+    }
+
+    public String getResolvedBy() {
+        return resolvedBy;
+    }
+
+    public String getResolutionComment() {
+        return resolutionComment;
+    }
+
+    public Instant getResolvedAt() {
+        return resolvedAt;
     }
 
     public int getLineOrder() {

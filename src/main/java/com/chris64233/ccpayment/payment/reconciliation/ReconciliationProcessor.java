@@ -8,6 +8,8 @@ import com.chris64233.ccpayment.payment.ErrorCode;
 import com.chris64233.ccpayment.payment.PaymentException;
 import com.chris64233.ccpayment.payment.reconciliation.dto.ReconciliationBatchDetailResponse;
 import com.chris64233.ccpayment.payment.reconciliation.dto.ReconciliationDetailRequest;
+import com.chris64233.ccpayment.payment.reconciliation.dto.ReconciliationLineResponse;
+import com.chris64233.ccpayment.payment.reconciliation.dto.ResolveDiscrepancyRequest;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -25,13 +27,16 @@ import java.util.stream.Collectors;
 public class ReconciliationProcessor {
 
     private final ReconciliationBatchRepository batchRepository;
+    private final ReconciliationLineRepository lineRepository;
     private final PaymentOrderRepository orderRepository;
     private final Clock clock;
 
     public ReconciliationProcessor(ReconciliationBatchRepository batchRepository,
+                                   ReconciliationLineRepository lineRepository,
                                    PaymentOrderRepository orderRepository,
                                    Clock clock) {
         this.batchRepository = batchRepository;
+        this.lineRepository = lineRepository;
         this.orderRepository = orderRepository;
         this.clock = clock;
     }
@@ -72,6 +77,28 @@ public class ReconciliationProcessor {
             throw new PaymentException(ErrorCode.RECONCILIATION_BATCH_CONTENT_CONFLICT);
         }
         return ReconciliationBatchDetailResponse.from(batch);
+    }
+
+    @Transactional
+    public ReconciliationLineResponse resolve(String batchNo, String channelTxnNo,
+                                              ResolveDiscrepancyRequest request) {
+        ReconciliationBatch batch = batchRepository.findByBatchNo(batchNo)
+                .orElseThrow(() -> new PaymentException(ErrorCode.RECONCILIATION_BATCH_NOT_FOUND));
+        ReconciliationLine line = lineRepository
+                .findWithLockByBatch_IdAndChannelTxnNo(batch.getId(), channelTxnNo)
+                .orElseThrow(() -> new PaymentException(ErrorCode.RECONCILIATION_LINE_NOT_FOUND));
+        if (line.getMatchStatus() == ReconciliationMatchStatus.MATCHED) {
+            throw new PaymentException(ErrorCode.RECONCILIATION_LINE_NOT_RESOLVABLE);
+        }
+        if (line.isResolved()) {
+            if (line.resolutionMatches(request.resolution(), request.operator(), request.comment())) {
+                return ReconciliationLineResponse.from(line);
+            }
+            throw new PaymentException(ErrorCode.RECONCILIATION_RESOLUTION_CONFLICT);
+        }
+        line.resolve(request.resolution(), request.operator(), request.comment(),
+                Instant.now(clock));
+        return ReconciliationLineResponse.from(lineRepository.saveAndFlush(line));
     }
 
     private List<ReconciliationLine> compare(List<ReconciliationDetailRequest> details) {
