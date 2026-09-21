@@ -8,11 +8,15 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 import java.time.Instant;
+import java.util.Collection;
+import java.util.List;
 import java.util.Optional;
 
 public interface PaymentOrderRepository extends JpaRepository<PaymentOrder, Long> {
 
     Optional<PaymentOrder> findByPaymentNo(String paymentNo);
+
+    List<PaymentOrder> findAllByPaymentNoIn(Collection<String> paymentNos);
 
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("select o from PaymentOrder o where o.paymentNo = :paymentNo")

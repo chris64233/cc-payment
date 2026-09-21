@@ -18,6 +18,8 @@ public enum ErrorCode {
     INVALID_NOTIFICATION_SIGNATURE(HttpStatus.UNAUTHORIZED, "通知签名校验失败"),
     INVALID_NOTIFICATION_TIMESTAMP(HttpStatus.UNAUTHORIZED, "通知时间戳不合法或已过期"),
     NOTIFICATION_EVENT_CONFLICT(HttpStatus.CONFLICT, "同一事件对应的通知内容不一致"),
+    RECONCILIATION_BATCH_NOT_FOUND(HttpStatus.NOT_FOUND, "对账批次不存在"),
+    RECONCILIATION_BATCH_CONFLICT(HttpStatus.CONFLICT, "同一渠道和账务日期已存在内容不同的对账批次"),
     INTERNAL_ERROR(HttpStatus.INTERNAL_SERVER_ERROR, "系统内部错误");
 
     private final HttpStatus status;

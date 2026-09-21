@@ -1,6 +1,6 @@
 # cc-payment
 
-支付业务后端项目，当前提供支付单的创建、查询、关闭、退款以及支付结果通知（渠道回调）能力。
+支付业务后端项目，当前提供支付单的创建、查询、关闭、退款、支付结果通知（渠道回调）以及支付渠道对账能力。
 
 ## 开发环境
 
@@ -112,6 +112,47 @@
 
 签名校验使用恒定时间比较。签名不正确返回 `401 INVALID_NOTIFICATION_SIGNATURE`；时间戳格式错误或超过允许的 5 分钟偏差返回 `401 INVALID_NOTIFICATION_TIMESTAMP`。
 
+### 提交渠道对账
+
+`POST /api/reconciliation-batches`
+
+- 请求体：
+
+      {
+        "channel": "ALIPAY",
+        "accountingDate": "2026-09-20",
+        "details": [
+          {"channelTxnNo": "TXN001", "paymentNo": "PO...", "amount": 99.50, "currency": "USD", "channelResult": "SUCCESS"}
+        ]
+      }
+
+- 字段校验：`channel` 必填；`accountingDate` 必填（`yyyy-MM-dd`）；`details` 不能为空且最多 1000 条；每条明细的 `channelTxnNo`、`paymentNo` 必填，`amount` 必须大于 0 且最多两位小数，`currency` 必须是三位大写字母，`channelResult` 只允许 `SUCCESS` 或 `FAILED`。
+- 批次校验：渠道交易号在同一批次内不能重复，支付单号在同一批次内也不能重复；任意一条明细不合法（字段非法或重复）时整批拒绝，返回 `400 VALIDATION_ERROR`，不会写入任何批次或逐笔数据。
+- 唯一性：同一 `channel` + `accountingDate` 只能生成一个对账批次（数据库唯一约束兜底）。
+- 幂等语义：服务端对整批明细做规范化并排序后计算 SHA-256 指纹，因此明细排列顺序不同但内容一致视为相同请求。重复提交相同内容时直接返回第一次生成的批次（HTTP `200`），不重复生成数据；内容发生任何变化时返回 `409 RECONCILIATION_BATCH_CONFLICT`。首次提交成功返回 `201`。
+
+### 查询对账批次
+
+`GET /api/reconciliation-batches/{batchNo}`
+
+- 成功返回 `200` 及批次 JSON，包含批次汇总和全部逐笔结果；不存在返回 `404 RECONCILIATION_BATCH_NOT_FOUND`。
+- 汇总字段：`batchNo`、`channel`、`accountingDate`、`totalCount`（明细总数）、`matchCount`（匹配数量）、`mismatchCount`（差异数量）、`createdAt`。
+- 逐笔字段（按首次提交时的顺序返回）：`lineNo`、`channelTxnNo`、`paymentNo`、`amount`、`currency`、`channelResult`、`result`（`MATCH` / `MISMATCH`）、`discrepancies`（差异类型列表，匹配时为空）。
+- 汇总与逐笔结果均在批次生成时持久化，重复查询直接返回已保存的结果，不会临时重新计算。
+
+#### 对账规则
+
+逐笔将渠道明细与本地支付单按 `paymentNo` 对比：
+
+- 本地支付单不存在：差异 `PAYMENT_ORDER_NOT_FOUND`，且该笔只标记这一种差异。
+- 金额不一致：差异 `AMOUNT_MISMATCH`，金额按支付单原始金额（不含退款扣减）比较。
+- 币种不一致：差异 `CURRENCY_MISMATCH`。
+- 状态不一致：差异 `STATUS_MISMATCH`。状态匹配规则：
+  - 渠道 `SUCCESS` 匹配本地 `SUCCESS`、`PARTIALLY_REFUNDED`、`REFUNDED`；
+  - 渠道 `FAILED` 只匹配本地 `FAILED`；
+  - 其余组合（如本地为 `PENDING`、`CLOSED`、`EXPIRED`，或成功/失败互不一致）均为状态不一致。
+- 金额、币种、状态三种差异可以同时存在；不存在任何差异时该笔标记为 `MATCH`，否则标记为 `MISMATCH`。
+
 ## 配置说明
 
 | 配置项 | 说明 |
@@ -127,3 +168,7 @@
 退款单表 `payment_refunds`：`refund_no`、`idempotency_key`、`merchant_refund_no` 均有数据库唯一约束，记录 `payment_no`、`amount`、`request_fingerprint`（幂等内容摘要）、`status`（`SUCCEEDED`）和 `created_at`。
 
 通知事件表 `payment_notification_events`：`event_id` 有数据库唯一约束，记录 `payment_no`、`result`、`occurred_at`、通知内容摘要 `payload_hash` 和处理时间 `processed_at`，用于事件幂等与冲突检测。
+
+对账批次表 `payment_reconciliation_batches`：`batch_no` 以及 `(channel, accounting_date)` 均有数据库唯一约束，记录请求内容摘要 `request_fingerprint`（与明细顺序无关）、`total_count`、`match_count`、`mismatch_count` 和 `created_at`。
+
+对账明细表 `payment_reconciliation_entries`：`(batch_id, line_no)` 有数据库唯一约束，记录渠道交易号、支付单号、金额、币种、渠道结果、逐笔结果 `result`（`MATCH` / `MISMATCH`）、差异类型（逗号分隔的 `PAYMENT_ORDER_NOT_FOUND` / `AMOUNT_MISMATCH` / `CURRENCY_MISMATCH` / `STATUS_MISMATCH`）。
