@@ -8,6 +8,8 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 import java.time.Instant;
+import java.util.Collection;
+import java.util.List;
 import java.util.Optional;
 
 public interface PaymentOrderRepository extends JpaRepository<PaymentOrder, Long> {
@@ -19,6 +21,8 @@ public interface PaymentOrderRepository extends JpaRepository<PaymentOrder, Long
     Optional<PaymentOrder> findByPaymentNoForUpdate(@Param("paymentNo") String paymentNo);
 
     Optional<PaymentOrder> findByIdempotencyKey(String idempotencyKey);
+
+    List<PaymentOrder> findByPaymentNoIn(Collection<String> paymentNos);
 
     boolean existsByMerchantOrderNo(String merchantOrderNo);
 
