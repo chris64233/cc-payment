@@ -140,16 +140,40 @@
 
 `GET /api/reconciliation-batches/{batchNo}`
 
-- 成功返回 `200` 及汇总 JSON：`batchNo`、`channel`、`accountingDate`、`totalCount`（明细总数）、`matchedCount`（匹配数量）、`discrepancyCount`（差异数量）、`createdAt`。
+- 成功返回 `200` 及汇总 JSON：`batchNo`、`channel`、`accountingDate`、`totalCount`（明细总数）、`matchedCount`（匹配数量）、`discrepancyCount`（差异数量）、`pendingDiscrepancyCount`（待处理差异数量）、`resolvedDiscrepancyCount`（已处理差异数量）、`status`（批次处理状态，`PROCESSING` / `COMPLETED`）、`createdAt`。
 - 不存在返回 `404 RECONCILIATION_BATCH_NOT_FOUND`。
 
 #### 查询逐笔结果
 
 `GET /api/reconciliation-batches/{batchNo}/lines`
 
-- 成功返回 `200`，除汇总字段外还包含 `lines` 数组，顺序与首次提交时的明细顺序一致；每条包含：`channelTxnNo`、`paymentNo`、`amount`、`currency`、`channelResult`、`matchStatus`（`MATCHED` / `MISMATCHED`）、`discrepancies`（差异类型列表，无差异时为空数组）。
+- 成功返回 `200`，除汇总字段外还包含 `lines` 数组，顺序与首次提交时的明细顺序一致；每条包含：`channelTxnNo`、`paymentNo`、`amount`、`currency`、`channelResult`、`matchStatus`（`MATCHED` / `MISMATCHED`）、`discrepancies`（差异类型列表，无差异时为空数组）以及差异处理信息（见“提交差异处理结论”）。
 - 不存在返回 `404 RECONCILIATION_BATCH_NOT_FOUND`。
 - 汇总与逐笔结果在批次提交时一次性计算并持久化，重复查询始终返回已保存的结果，不会临时重新计算。
+
+#### 提交差异处理结论
+
+`POST /api/reconciliation-batches/{batchNo}/lines/{channelTxnNo}/resolution`
+
+- 请求体：
+
+      {"resolution": "CONFIRM", "resolvedBy": "operator-a", "resolutionNote": "确认差异，线下补单"}
+
+- 字段说明：`resolution` 为处理结论，仅允许 `CONFIRM`（确认差异）/ `IGNORE`（忽略差异）；`resolvedBy` 为处理人；`resolutionNote` 为处理说明。
+- 校验规则：`resolution`、`resolvedBy`、`resolutionNote` 均不能为空，`resolvedBy` 最长 64 个字符，`resolutionNote` 最长 200 个字符；不合法返回 `400 VALIDATION_ERROR`。
+- 仅允许处理存在差异且尚未处理的明细（`matchStatus` 为 `MISMATCHED` 且 `resolutionStatus` 为 `PENDING`）；匹配成功（`MATCHED`）的明细不能处理，返回 `409 RECONCILIATION_LINE_NOT_RESOLVABLE`。
+- 成功返回 `200` 及该明细 JSON（字段同“查询逐笔结果”中的单条明细），处理信息持久化保存，查询批次汇总与逐笔结果时均会返回。
+- 差异处理完成后不能修改：
+  - 完全相同的处理请求（`resolution`、`resolvedBy`、`resolutionNote` 均一致）重复提交时直接返回第一次的结果，不重复写入。
+  - 处理结论、处理人或处理说明任一发生变化时返回 `409 RECONCILIATION_RESOLUTION_CONFLICT`，已保存结果不变。
+- 批次不存在返回 `404 RECONCILIATION_BATCH_NOT_FOUND`；明细不存在返回 `404 RECONCILIATION_LINE_NOT_FOUND`。
+- 并发处理同一批次的差异明细时通过批次行级悲观锁串行化，不会丢失更新。
+
+#### 差异处理状态规则
+
+- 批次生成后，每条存在差异（`MISMATCHED`）的明细 `resolutionStatus` 初始为 `PENDING`（待处理），提交处理结论后变为 `RESOLVED`（已处理）；匹配成功的明细无处理状态（`resolutionStatus` 为 `null`）。
+- 批次处理状态 `status`：只要还有未处理差异即为 `PROCESSING`；全部差异处理完成后变为 `COMPLETED`；没有差异的批次从创建开始就是 `COMPLETED`。
+- 逐笔结果中的差异处理字段：`resolutionStatus`（`PENDING` / `RESOLVED` / `null`）、`resolution`（`CONFIRM` / `IGNORE`，未处理时为 `null`）、`resolvedBy`、`resolutionNote`、`resolvedAt`（处理时间，未处理时为 `null`）。
 
 #### 逐笔对账规则
 
@@ -183,6 +207,6 @@
 
 通知事件表 `payment_notification_events`：`event_id` 有数据库唯一约束，记录 `payment_no`、`result`、`occurred_at`、通知内容摘要 `payload_hash` 和处理时间 `processed_at`，用于事件幂等与冲突检测。
 
-对账批次表 `payment_reconciliation_batches`：`batch_no` 唯一，`channel` + `accounting_date` 组合唯一（同一渠道同一账务日期只能有一个批次），记录请求内容摘要 `request_fingerprint`（对排序后的明细做 SHA-256，与明细顺序无关）、`total_count`、`matched_count`、`discrepancy_count` 和 `created_at`。
+对账批次表 `payment_reconciliation_batches`：`batch_no` 唯一，`channel` + `accounting_date` 组合唯一（同一渠道同一账务日期只能有一个批次），记录请求内容摘要 `request_fingerprint`（对排序后的明细做 SHA-256，与明细顺序无关）、`total_count`、`matched_count`、`discrepancy_count` 和 `created_at`；批次处理状态（`PROCESSING` / `COMPLETED`）与待处理/已处理差异数量由明细的处理结果实时推导，不冗余存储。
 
-对账明细表 `payment_reconciliation_lines`：归属对账批次，`line_order` 记录提交顺序，批次内 `channel_txn_no`、`payment_no` 各有唯一约束；记录渠道金额、币种、渠道结果、`match_status`，差异类型存于子表 `payment_reconciliation_line_discrepancies`。
+对账明细表 `payment_reconciliation_lines`：归属对账批次，`line_order` 记录提交顺序，批次内 `channel_txn_no`、`payment_no` 各有唯一约束；记录渠道金额、币种、渠道结果、`match_status`，差异类型存于子表 `payment_reconciliation_line_discrepancies`；差异处理结果记录于 `resolution`（`CONFIRM` / `IGNORE`）、`resolved_by`、`resolution_note`、`resolved_at`，未处理时均为 `NULL`。

@@ -109,6 +109,23 @@ public class ReconciliationBatch {
         return discrepancyCount;
     }
 
+    public int getResolvedDiscrepancyCount() {
+        return (int) lines.stream()
+                .filter(line -> line.getMatchStatus() == ReconciliationMatchStatus.MISMATCHED
+                        && line.isResolved())
+                .count();
+    }
+
+    public int getPendingDiscrepancyCount() {
+        return discrepancyCount - getResolvedDiscrepancyCount();
+    }
+
+    public ReconciliationBatchStatus getStatus() {
+        return getPendingDiscrepancyCount() > 0
+                ? ReconciliationBatchStatus.PROCESSING
+                : ReconciliationBatchStatus.COMPLETED;
+    }
+
     public Instant getCreatedAt() {
         return createdAt;
     }

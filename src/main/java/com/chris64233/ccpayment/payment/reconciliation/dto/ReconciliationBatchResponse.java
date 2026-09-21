@@ -1,6 +1,7 @@
 package com.chris64233.ccpayment.payment.reconciliation.dto;
 
 import com.chris64233.ccpayment.payment.reconciliation.ReconciliationBatch;
+import com.chris64233.ccpayment.payment.reconciliation.ReconciliationBatchStatus;
 
 import java.time.Instant;
 import java.time.LocalDate;
@@ -12,6 +13,9 @@ public record ReconciliationBatchResponse(
         int totalCount,
         int matchedCount,
         int discrepancyCount,
+        int pendingDiscrepancyCount,
+        int resolvedDiscrepancyCount,
+        ReconciliationBatchStatus status,
         Instant createdAt
 ) {
 
@@ -23,6 +27,9 @@ public record ReconciliationBatchResponse(
                 batch.getTotalCount(),
                 batch.getMatchedCount(),
                 batch.getDiscrepancyCount(),
+                batch.getPendingDiscrepancyCount(),
+                batch.getResolvedDiscrepancyCount(),
+                batch.getStatus(),
                 batch.getCreatedAt()
         );
     }

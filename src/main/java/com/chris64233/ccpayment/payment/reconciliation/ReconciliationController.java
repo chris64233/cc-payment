@@ -2,6 +2,8 @@ package com.chris64233.ccpayment.payment.reconciliation;
 
 import com.chris64233.ccpayment.payment.reconciliation.dto.ReconciliationBatchDetailResponse;
 import com.chris64233.ccpayment.payment.reconciliation.dto.ReconciliationBatchResponse;
+import com.chris64233.ccpayment.payment.reconciliation.dto.ReconciliationLineResponse;
+import com.chris64233.ccpayment.payment.reconciliation.dto.ReconciliationResolutionRequest;
 import com.chris64233.ccpayment.payment.reconciliation.dto.ReconciliationSubmissionRequest;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
@@ -50,5 +52,12 @@ public class ReconciliationController {
     @GetMapping("/reconciliation-batches/{batchNo}/lines")
     public ReconciliationBatchDetailResponse getLines(@PathVariable String batchNo) {
         return service.getDetails(batchNo);
+    }
+
+    @PostMapping("/reconciliation-batches/{batchNo}/lines/{channelTxnNo}/resolution")
+    public ReconciliationLineResponse resolve(@PathVariable String batchNo,
+                                              @PathVariable String channelTxnNo,
+                                              @Valid @RequestBody ReconciliationResolutionRequest request) {
+        return service.resolve(batchNo, channelTxnNo, request);
     }
 }

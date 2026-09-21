@@ -5,6 +5,8 @@ import com.chris64233.ccpayment.payment.PaymentException;
 import com.chris64233.ccpayment.payment.reconciliation.dto.ReconciliationBatchDetailResponse;
 import com.chris64233.ccpayment.payment.reconciliation.dto.ReconciliationBatchResponse;
 import com.chris64233.ccpayment.payment.reconciliation.dto.ReconciliationDetailRequest;
+import com.chris64233.ccpayment.payment.reconciliation.dto.ReconciliationLineResponse;
+import com.chris64233.ccpayment.payment.reconciliation.dto.ReconciliationResolutionRequest;
 import com.chris64233.ccpayment.payment.reconciliation.dto.ReconciliationSubmissionRequest;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
@@ -15,6 +17,8 @@ import tools.jackson.databind.ObjectMapper;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.time.Clock;
+import java.time.Instant;
 import java.time.LocalDate;
 import java.util.Comparator;
 import java.util.HexFormat;
@@ -28,13 +32,16 @@ public class ReconciliationService {
     private final ReconciliationBatchRepository batchRepository;
     private final ReconciliationProcessor processor;
     private final ObjectMapper objectMapper;
+    private final Clock clock;
 
     public ReconciliationService(ReconciliationBatchRepository batchRepository,
                                  ReconciliationProcessor processor,
-                                 ObjectMapper objectMapper) {
+                                 ObjectMapper objectMapper,
+                                 Clock clock) {
         this.batchRepository = batchRepository;
         this.processor = processor;
         this.objectMapper = objectMapper;
+        this.clock = clock;
     }
 
     public ReconciliationBatchDetailResponse submit(String channel, LocalDate accountingDate,
@@ -71,6 +78,32 @@ public class ReconciliationService {
         return batchRepository.findByBatchNo(batchNo)
                 .map(ReconciliationBatchDetailResponse::from)
                 .orElseThrow(() -> new PaymentException(ErrorCode.RECONCILIATION_BATCH_NOT_FOUND));
+    }
+
+    @Transactional
+    public ReconciliationLineResponse resolve(String batchNo, String channelTxnNo,
+                                              ReconciliationResolutionRequest request) {
+        ReconciliationBatch batch = batchRepository.findByBatchNoForUpdate(batchNo)
+                .orElseThrow(() -> new PaymentException(ErrorCode.RECONCILIATION_BATCH_NOT_FOUND));
+        ReconciliationLine line = batch.getLines().stream()
+                .filter(candidate -> candidate.getChannelTxnNo().equals(channelTxnNo))
+                .findFirst()
+                .orElseThrow(() -> new PaymentException(ErrorCode.RECONCILIATION_LINE_NOT_FOUND));
+        if (line.getMatchStatus() != ReconciliationMatchStatus.MISMATCHED) {
+            throw new PaymentException(ErrorCode.RECONCILIATION_LINE_NOT_RESOLVABLE);
+        }
+        if (line.isResolved()) {
+            boolean identical = line.getResolution() == request.resolution()
+                    && line.getResolvedBy().equals(request.resolvedBy())
+                    && line.getResolutionNote().equals(request.resolutionNote());
+            if (!identical) {
+                throw new PaymentException(ErrorCode.RECONCILIATION_RESOLUTION_CONFLICT);
+            }
+            return ReconciliationLineResponse.from(line);
+        }
+        line.resolve(request.resolution(), request.resolvedBy(), request.resolutionNote(),
+                Instant.now(clock));
+        return ReconciliationLineResponse.from(line);
     }
 
     private void validateBatch(List<ReconciliationDetailRequest> details) {
