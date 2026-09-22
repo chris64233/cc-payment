@@ -47,6 +47,8 @@ public class PaymentOrderService {
                 request.merchantOrderNo(),
                 request.amount(),
                 request.currency(),
+                request.notifyUrl() == null || request.notifyUrl().isBlank()
+                        ? null : request.notifyUrl().trim(),
                 now,
                 now.plus(orderExpiration)
         );
@@ -101,7 +103,9 @@ public class PaymentOrderService {
     private String fingerprint(CreatePaymentOrderRequest request) {
         String raw = request.merchantOrderNo() + "|"
                 + request.amount().stripTrailingZeros().toPlainString() + "|"
-                + request.currency();
+                + request.currency() + "|"
+                + (request.notifyUrl() == null || request.notifyUrl().isBlank()
+                        ? "" : request.notifyUrl().trim());
         try {
             MessageDigest digest = MessageDigest.getInstance("SHA-256");
             return HexFormat.of().formatHex(digest.digest(raw.getBytes(StandardCharsets.UTF_8)));

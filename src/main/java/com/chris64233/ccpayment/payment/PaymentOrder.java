@@ -48,6 +48,9 @@ public class PaymentOrder {
     @Column(name = "currency", nullable = false, length = 3)
     private String currency;
 
+    @Column(name = "notify_url", length = 512)
+    private String notifyUrl;
+
     @Enumerated(EnumType.STRING)
     @Column(name = "status", nullable = false, length = 16)
     private PaymentOrderStatus status;
@@ -66,7 +69,7 @@ public class PaymentOrder {
 
     public PaymentOrder(String paymentNo, String idempotencyKey, String requestFingerprint,
                         String merchantOrderNo, BigDecimal amount, String currency,
-                        Instant createdAt, Instant expiredAt) {
+                        String notifyUrl, Instant createdAt, Instant expiredAt) {
         this.paymentNo = paymentNo;
         this.idempotencyKey = idempotencyKey;
         this.requestFingerprint = requestFingerprint;
@@ -74,6 +77,7 @@ public class PaymentOrder {
         this.amount = amount;
         this.refundedAmount = BigDecimal.ZERO;
         this.currency = currency;
+        this.notifyUrl = notifyUrl;
         this.status = PaymentOrderStatus.PENDING;
         this.createdAt = createdAt;
         this.expiredAt = expiredAt;
@@ -110,6 +114,10 @@ public class PaymentOrder {
 
     public String getCurrency() {
         return currency;
+    }
+
+    public String getNotifyUrl() {
+        return notifyUrl;
     }
 
     public PaymentOrderStatus getStatus() {

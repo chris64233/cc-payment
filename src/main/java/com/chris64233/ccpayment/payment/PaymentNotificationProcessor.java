@@ -1,5 +1,6 @@
 package com.chris64233.ccpayment.payment;
 
+import com.chris64233.ccpayment.payment.merchant.MerchantNotificationTaskService;
 import com.chris64233.ccpayment.payment.dto.PaymentNotificationRequest;
 import com.chris64233.ccpayment.payment.dto.PaymentOrderResponse;
 import org.springframework.stereotype.Component;
@@ -12,11 +13,14 @@ public class PaymentNotificationProcessor {
 
     private final PaymentOrderRepository orderRepository;
     private final PaymentNotificationEventRepository eventRepository;
+    private final MerchantNotificationTaskService merchantNotificationTaskService;
 
     public PaymentNotificationProcessor(PaymentOrderRepository orderRepository,
-                                        PaymentNotificationEventRepository eventRepository) {
+                                        PaymentNotificationEventRepository eventRepository,
+                                        MerchantNotificationTaskService merchantNotificationTaskService) {
         this.orderRepository = orderRepository;
         this.eventRepository = eventRepository;
+        this.merchantNotificationTaskService = merchantNotificationTaskService;
     }
 
     @Transactional
@@ -35,12 +39,14 @@ public class PaymentNotificationProcessor {
         }
 
         PaymentOrderStatus status = order.getStatus();
+        boolean firstTransition = false;
         if (status == PaymentOrderStatus.EXPIRED) {
             // 已过期的支付单不再接收任何支付结果
             throw new PaymentException(ErrorCode.PAYMENT_ORDER_EXPIRED);
         }
         if (status == PaymentOrderStatus.PENDING) {
             order.applyResult(request.result());
+            firstTransition = true;
         } else if (status == PaymentOrderStatus.CLOSED
                 || status != request.result().toStatus()) {
             // CLOSED 收到任何支付结果、或终态收到相反结果，均不允许
@@ -51,6 +57,12 @@ public class PaymentNotificationProcessor {
         eventRepository.saveAndFlush(new PaymentNotificationEvent(
                 request.eventId(), order.getPaymentNo(), request.result(),
                 request.occurredAt(), payloadHash));
-        return PaymentOrderResponse.from(orderRepository.save(order));
+        PaymentOrder saved = orderRepository.saveAndFlush(order);
+        if (firstTransition) {
+            // 与支付单状态变更、渠道事件落库处于同一事务；无通知地址或重复回调不会生成任务
+            merchantNotificationTaskService.createTask(
+                    saved, request.eventId(), request.result(), request.occurredAt());
+        }
+        return PaymentOrderResponse.from(saved);
     }
 }

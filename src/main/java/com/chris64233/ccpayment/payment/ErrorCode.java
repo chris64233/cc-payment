@@ -18,6 +18,7 @@ public enum ErrorCode {
     INVALID_NOTIFICATION_SIGNATURE(HttpStatus.UNAUTHORIZED, "通知签名校验失败"),
     INVALID_NOTIFICATION_TIMESTAMP(HttpStatus.UNAUTHORIZED, "通知时间戳不合法或已过期"),
     NOTIFICATION_EVENT_CONFLICT(HttpStatus.CONFLICT, "同一事件对应的通知内容不一致"),
+    MERCHANT_NOTIFICATION_NOT_FOUND(HttpStatus.NOT_FOUND, "该支付单没有商户通知任务"),
     RECONCILIATION_BATCH_CONTENT_CONFLICT(HttpStatus.CONFLICT, "同一渠道和账务日期的对账内容与已提交批次不一致"),
     RECONCILIATION_BATCH_NOT_FOUND(HttpStatus.NOT_FOUND, "对账批次不存在"),
     RECONCILIATION_LINE_NOT_FOUND(HttpStatus.NOT_FOUND, "对账明细不存在"),
