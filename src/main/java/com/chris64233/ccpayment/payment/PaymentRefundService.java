@@ -61,7 +61,7 @@ public class PaymentRefundService {
                 .orElseThrow(() -> new PaymentException(ErrorCode.REFUND_NOT_FOUND));
     }
 
-    static String fingerprint(String paymentNo, CreateRefundRequest request) {
+    public static String fingerprint(String paymentNo, CreateRefundRequest request) {
         String raw = paymentNo + "|"
                 + request.merchantRefundNo() + "|"
                 + request.amount().stripTrailingZeros().toPlainString();

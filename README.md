@@ -1,6 +1,6 @@
 # cc-payment
 
-支付业务后端项目，当前提供支付单的创建、查询、关闭、退款、支付结果通知（渠道回调）、商户支付结果通知（出站投递）以及支付渠道对账能力。
+支付业务后端项目，当前提供支付单的创建、查询、关闭、退款、支付争议处理、支付结果通知（渠道回调）、商户支付结果通知（出站投递）以及支付渠道对账能力。
 
 ## 开发环境
 
@@ -82,6 +82,61 @@
 `GET /api/refunds/{refundNo}`
 
 - 成功返回 `200` 及退款单 JSON；不存在返回 `404 REFUND_NOT_FOUND`。
+
+### 创建支付争议
+
+`POST /api/payment-orders/{paymentNo}/disputes`
+
+- 请求体：
+
+      {"externalDisputeNo": "CHB20260922001", "reason": "FRAUD", "description": "持卡人否认交易"}
+
+- 字段说明：`externalDisputeNo` 为外部争议号（全局唯一），`reason` 为争议原因，`description` 为争议说明；三个字段均不能为空，长度上限分别为 64、64、500 个字符。
+- 仅 `SUCCESS` 和 `PARTIALLY_REFUNDED` 状态、且仍有剩余可退款金额（`amount - refundedAmount > 0`）的支付单允许创建争议；状态不允许或已无剩余可退款金额时返回 `409 PAYMENT_ORDER_NOT_DISPUTABLE`。
+- 同一支付单只能有一个待处理（`PENDING`）争议，已存在时返回 `409 DISPUTE_ALREADY_PENDING`；争议处理完成后可以再次创建。
+- 成功返回 `201` 及争议详情 JSON（字段同“查询争议详情”）。
+- 外部争议号幂等语义：
+  - 相同 `externalDisputeNo` 且争议内容（支付单、原因、说明）完全相同的重复提交直接返回第一次的结果，不新增数据，统一返回 `201`。
+  - 相同 `externalDisputeNo` 但争议内容任一发生变化时返回 `409 DISPUTE_CONTENT_CONFLICT`，已保存结果不变。外部争议号有数据库唯一约束兜底。
+- 支付单不存在返回 `404 PAYMENT_ORDER_NOT_FOUND`；参数不合法返回 `400 VALIDATION_ERROR`。
+
+### 待处理争议与退款的关系
+
+- 支付单存在 `PENDING` 状态争议期间，不能再发起普通退款，退款请求返回 `409 DISPUTE_PAYMENT_BLOCKS_REFUND`（退款幂等重试不受影响：同一 `Idempotency-Key` 仍返回首次退款结果）。
+- 争议处理完成（商户胜诉或用户胜诉）后该限制解除。
+
+### 处理争议
+
+`POST /api/disputes/{disputeNo}/resolution`
+
+- 请求体：
+
+      {"resolution": "USER_WON", "resolvedBy": "operator-a", "resolutionNote": "判定商户责任，退还剩余款项"}
+
+- 字段说明：`resolution` 为处理结论，仅允许 `MERCHANT_WON`（商户胜诉）/ `USER_WON`（用户胜诉）；`resolvedBy` 为处理人（最长 64 个字符）；`resolutionNote` 为处理说明（最长 200 个字符）；均不能为空，不合法返回 `400 VALIDATION_ERROR`。
+- 处理时记录处理人、处理说明和处理时间 `resolvedAt`。
+- `MERCHANT_WON`（商户胜诉）：只关闭争议（状态变为 `MERCHANT_WON`），不改变支付单金额与状态，支付单可以继续发起普通退款。
+- `USER_WON`（用户胜诉）：在**同一个数据库事务**中为支付单当前剩余可退款金额（`amount - refundedAmount`）生成一笔 `SUCCEEDED` 的成功退款（系统生成退款单号与商户退款单号），并同步累加支付单的 `refundedAmount`、将支付单状态更新为 `PARTIALLY_REFUNDED` 或 `REFUNDED`，争议状态变为 `USER_WON` 并关联该退款单。处理过程中任何一步失败，整笔事务回滚，不会留下退款、支付单或争议的部分更新。
+- 处理幂等语义：
+  - 完全相同的处理请求（`resolution`、`resolvedBy`、`resolutionNote` 均一致）重复提交时直接返回第一次的结果，不会重复生成退款或重复累加退款金额。
+  - 处理结论、处理人或处理说明任一发生变化时返回 `409 DISPUTE_RESOLUTION_CONFLICT`，已保存结果不能被覆盖。
+- 争议不存在返回 `404 DISPUTE_NOT_FOUND`。
+
+### 查询争议详情
+
+`GET /api/disputes/{disputeNo}`
+
+- 成功返回 `200` 及争议 JSON：
+  - `disputeNo`：系统争议单号
+  - `externalDisputeNo`：外部争议号
+  - `paymentNo`：关联支付单号
+  - `reason`、`description`：争议原因与说明
+  - `status`：争议状态，`PENDING`（待处理）/ `MERCHANT_WON`（商户胜诉）/ `USER_WON`（用户胜诉）
+  - `resolvedBy`、`resolutionNote`、`resolvedAt`：处理人、处理说明、处理时间，未处理时为 `null`
+  - `createdAt`：争议创建时间
+  - `payment`：关联支付单信息，含 `paymentNo`、`amount`（原支付金额）、`refundedAmount`（累计退款金额）、`refundableAmount`（剩余可退款金额）、`currency`、`status`
+  - `refund`：用户胜诉时生成的强制退款信息（`refundNo`、`merchantRefundNo`、`amount`、`status`、`createdAt`）；待处理或商户胜诉时为 `null`
+- 争议不存在返回 `404 DISPUTE_NOT_FOUND`。
 
 ### 支付结果通知（渠道回调）
 
@@ -251,6 +306,8 @@
 支付单表新增 `notify_url`（可空）：商户支付结果通知地址，仅允许 `http`/`https`；为空时支付成功或失败不会生成商户通知任务。
 
 退款单表 `payment_refunds`：`refund_no`、`idempotency_key`、`merchant_refund_no` 均有数据库唯一约束，记录 `payment_no`、`amount`、`request_fingerprint`（幂等内容摘要）、`status`（`SUCCEEDED`）和 `created_at`。
+
+争议表 `payment_disputes`：`dispute_no` 唯一，`external_dispute_no` 全局唯一（数据库唯一约束），记录关联 `payment_no`、争议 `reason`、`description`、创建请求摘要 `request_fingerprint`（支付单号 + 外部争议号 + 原因 + 说明的 SHA-256，用于创建幂等与冲突检测）、`status`（`PENDING` / `MERCHANT_WON` / `USER_WON`）以及处理结果 `resolved_by`、`resolution_note`、`resolved_at`；`forced_refund_no` 记录用户胜诉时在同一事务中生成的强制退款单号，未生成时为 `NULL`。同一支付单的待处理争议唯一性通过支付单行级悲观锁串行化并复查保证；待处理争议存在时普通退款被拒绝。
 
 通知事件表 `payment_notification_events`：`event_id` 有数据库唯一约束，记录 `payment_no`、`result`、`occurred_at`、通知内容摘要 `payload_hash` 和处理时间 `processed_at`，用于事件幂等与冲突检测。
 

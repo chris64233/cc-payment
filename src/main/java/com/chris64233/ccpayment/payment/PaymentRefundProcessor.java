@@ -1,5 +1,7 @@
 package com.chris64233.ccpayment.payment;
 
+import com.chris64233.ccpayment.payment.dispute.PaymentDisputeRepository;
+import com.chris64233.ccpayment.payment.dispute.PaymentDisputeStatus;
 import com.chris64233.ccpayment.payment.dto.CreateRefundRequest;
 import com.chris64233.ccpayment.payment.dto.PaymentRefundResponse;
 import org.springframework.stereotype.Component;
@@ -13,11 +15,14 @@ public class PaymentRefundProcessor {
 
     private final PaymentOrderRepository orderRepository;
     private final PaymentRefundRepository refundRepository;
+    private final PaymentDisputeRepository disputeRepository;
 
     public PaymentRefundProcessor(PaymentOrderRepository orderRepository,
-                                  PaymentRefundRepository refundRepository) {
+                                  PaymentRefundRepository refundRepository,
+                                  PaymentDisputeRepository disputeRepository) {
         this.orderRepository = orderRepository;
         this.refundRepository = refundRepository;
+        this.disputeRepository = disputeRepository;
     }
 
     @Transactional
@@ -34,6 +39,9 @@ public class PaymentRefundProcessor {
 
         if (!order.isRefundable()) {
             throw new PaymentException(ErrorCode.PAYMENT_ORDER_NOT_REFUNDABLE);
+        }
+        if (disputeRepository.existsByPaymentNoAndStatus(paymentNo, PaymentDisputeStatus.PENDING)) {
+            throw new PaymentException(ErrorCode.DISPUTE_PAYMENT_BLOCKS_REFUND);
         }
         if (order.getRefundedAmount().add(request.amount()).compareTo(order.getAmount()) > 0) {
             throw new PaymentException(ErrorCode.REFUND_AMOUNT_EXCEEDED);
