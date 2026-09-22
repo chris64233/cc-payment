@@ -24,6 +24,13 @@ public enum ErrorCode {
     RECONCILIATION_LINE_NOT_FOUND(HttpStatus.NOT_FOUND, "对账明细不存在"),
     RECONCILIATION_LINE_NOT_RESOLVABLE(HttpStatus.CONFLICT, "匹配成功的明细不能提交差异处理"),
     RECONCILIATION_RESOLUTION_CONFLICT(HttpStatus.CONFLICT, "差异已处理，处理结论与已保存结果不一致"),
+    DISPUTE_NOT_FOUND(HttpStatus.NOT_FOUND, "争议不存在"),
+    DISPUTE_PAYMENT_ORDER_NOT_DISPUTABLE(HttpStatus.CONFLICT, "当前支付单状态不允许创建争议"),
+    DISPUTE_NO_REFUNDABLE_AMOUNT(HttpStatus.CONFLICT, "支付单已没有可退款金额，不能创建争议"),
+    DISPUTE_ALREADY_PENDING(HttpStatus.CONFLICT, "该支付单已存在待处理争议"),
+    DISPUTE_CONTENT_CONFLICT(HttpStatus.CONFLICT, "同一外部争议号对应的争议内容不一致"),
+    DISPUTE_RESOLUTION_CONFLICT(HttpStatus.CONFLICT, "争议已处理，处理内容与已保存结果不一致"),
+    PAYMENT_ORDER_DISPUTE_PENDING(HttpStatus.CONFLICT, "支付单存在待处理争议，暂不允许发起退款"),
     INTERNAL_ERROR(HttpStatus.INTERNAL_SERVER_ERROR, "系统内部错误");
 
     private final HttpStatus status;
