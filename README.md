@@ -1,6 +1,6 @@
 # cc-payment
 
-支付业务后端项目，当前提供支付单的创建、查询、关闭、退款、支付结果通知（渠道回调）以及支付渠道对账能力。
+支付业务后端项目，当前提供支付单的创建、查询、关闭、退款、支付结果通知（渠道回调）、商户支付结果通知以及支付渠道对账能力。
 
 ## 开发环境
 
@@ -32,11 +32,11 @@
 - 请求头：`Idempotency-Key`（必填，幂等键）
 - 请求体：
 
-      {"merchantOrderNo": "M20260919001", "amount": 99.50, "currency": "USD"}
+      {"merchantOrderNo": "M20260919001", "amount": 99.50, "currency": "USD", "notifyUrl": "https://merchant.example.com/payment-notify"}
 
-- 校验规则：`amount` 必须大于 0 且最多两位小数；`currency` 必须是三位大写字母；`merchantOrderNo` 全局唯一。
+- 校验规则：`amount` 必须大于 0 且最多两位小数；`currency` 必须是三位大写字母；`merchantOrderNo` 全局唯一；`notifyUrl`（商户通知地址）可不填，填写时必须是合法的 HTTP 或 HTTPS 地址且不超过 512 个字符。
 - 幂等语义：同一 `Idempotency-Key` 且请求内容一致时，返回第一次创建的支付单，不新增数据；同一幂等键请求内容不一致时返回 `409 IDEMPOTENCY_KEY_CONFLICT`。
-- 成功返回 `201` 及支付单 JSON（`paymentNo`、`merchantOrderNo`、`amount`、`refundedAmount`、`currency`、`status`、`createdAt`、`expiredAt`、`updatedAt`），其中 `refundedAmount` 为累计退款金额，初始为 0；`expiredAt` 为支付单过期时间，等于创建时间加上配置的有效期（默认 30 分钟）。
+- 成功返回 `201` 及支付单 JSON（`paymentNo`、`merchantOrderNo`、`amount`、`refundedAmount`、`currency`、`notifyUrl`、`status`、`createdAt`、`expiredAt`、`updatedAt`），其中 `refundedAmount` 为累计退款金额，初始为 0；`expiredAt` 为支付单过期时间，等于创建时间加上配置的有效期（默认 30 分钟）。
 - 商户订单号重复返回 `409 DUPLICATE_MERCHANT_ORDER_NO`；参数不合法返回 `400 VALIDATION_ERROR`；缺少幂等键返回 `400 MISSING_IDEMPOTENCY_KEY`。
 
 ### 查询支付单
@@ -99,6 +99,27 @@
 - 状态机：仅 `PENDING` 可首次变为 `SUCCESS` / `FAILED`；已是 `SUCCESS` / `FAILED` 时收到相同结果直接返回当前结果，收到相反结果返回 `409 ILLEGAL_STATE_TRANSITION`；`CLOSED` 收到任何支付结果返回 `409`；`EXPIRED` 收到任何支付结果返回 `409 PAYMENT_ORDER_EXPIRED`。并发到达的相反结果只有一个生效，另一个返回 `409`。
 - 事件幂等：`eventId` 是渠道事件的唯一标识（数据库唯一约束）。同一 `eventId` 且通知内容完全相同时，直接返回第一次处理后的结果，不重复修改支付单；同一 `eventId` 内容不一致时返回 `409 NOTIFICATION_EVENT_CONFLICT`。
 - 支付单不存在返回 `404 PAYMENT_ORDER_NOT_FOUND`。
+
+### 商户支付结果通知
+
+创建支付单时填写了 `notifyUrl` 的支付单，在因渠道回调第一次从 `PENDING` 变为 `SUCCESS` 或 `FAILED` 时，会在同一事务中生成一条持久化的通知投递任务；未填写 `notifyUrl` 的支付单不生成任务。渠道事件重放或相同支付结果重复到达不会重复生成任务（每个支付单最多一条任务，`payment_no` 有数据库唯一约束兜底）。
+
+通知内容在任务生成时固定并持久化（`payload`），包含 `eventId`（事件编号）、`paymentNo`（支付单号）、`merchantOrderNo`（商户订单号）、`result`（支付结果）、`amount`（金额）、`currency`（币种）、`occurredAt`（结果发生时间），后续投递原样发送，不会重新拼装。
+
+后台定时任务按配置项 `payment.merchant-notify.scan-interval`（默认 `30s`）扫描已到期的任务并投递：
+
+- 向 `notifyUrl` 发送 `POST` 请求（`Content-Type: application/json`），请求体为持久化的通知内容。
+- HTTP 返回 2xx 视为成功，任务标记为 `SUCCESS` 并记录 `succeededAt`，之后不再投递。
+- 网络异常或其他状态码视为失败，记录尝试次数 `attemptCount` 和最近一次失败原因 `lastError`，并按 1 分钟、5 分钟、15 分钟的间隔重试（可通过 `payment.merchant-notify.retry-intervals` 配置）。
+- 包含首次投递在内最多尝试 4 次（可通过 `payment.merchant-notify.max-attempts` 配置），之后标记为最终失败 `FAILED`，不再投递。
+- 任务持久化在数据库中，服务重启后尚未成功且仍有重试机会的任务会继续被扫描处理。
+
+#### 查询通知任务
+
+`GET /api/payment-orders/{paymentNo}/notification`
+
+- 成功返回 `200` 及任务 JSON：`paymentNo`、`notifyUrl`、`content`（持久化的通知内容）、`status`（`PENDING` / `SUCCESS` / `FAILED`）、`attemptCount`（已尝试次数）、`nextAttemptAt`（下次投递时间，终态时为 `null`）、`lastError`（最近一次失败原因）、`succeededAt`（成功时间，未成功时为 `null`）、`createdAt`、`updatedAt`。
+- 支付单没有通知任务（未填写 `notifyUrl` 或尚未收到支付结果）时返回 `404 NOTIFICATION_TASK_NOT_FOUND`。
 
 #### 签名计算
 
@@ -198,14 +219,20 @@
 | `payment.notification-secret` | 支付结果通知的 HMAC-SHA256 签名密钥，生产环境务必替换默认值 |
 | `payment.order-expiration` | 支付单有效期，创建时据此计算 `expiredAt`，默认 `30m` |
 | `payment.expiration-check-interval` | 到期支付单扫描任务的执行间隔，默认 `60s` |
+| `payment.merchant-notify.scan-interval` | 商户通知投递任务的扫描间隔，默认 `30s` |
+| `payment.merchant-notify.request-timeout` | 商户通知 HTTP 请求的连接与读取超时时间，默认 `5s` |
+| `payment.merchant-notify.max-attempts` | 商户通知最大投递次数（含首次），默认 `4` |
+| `payment.merchant-notify.retry-intervals` | 商户通知失败后的重试间隔序列，默认 `1m,5m,15m` |
 
 ## 数据模型
 
-支付单表 `payment_orders`：`payment_no`、`idempotency_key`、`merchant_order_no` 均有数据库唯一约束，`status` 支持 `PENDING`、`SUCCESS`、`FAILED`、`CLOSED`、`EXPIRED`、`PARTIALLY_REFUNDED`、`REFUNDED`，`refunded_amount` 记录累计退款金额，`expired_at` 记录支付单过期时间。
+支付单表 `payment_orders`：`payment_no`、`idempotency_key`、`merchant_order_no` 均有数据库唯一约束，`status` 支持 `PENDING`、`SUCCESS`、`FAILED`、`CLOSED`、`EXPIRED`、`PARTIALLY_REFUNDED`、`REFUNDED`，`refunded_amount` 记录累计退款金额，`expired_at` 记录支付单过期时间，`notify_url` 记录商户通知地址（可为空）。
 
 退款单表 `payment_refunds`：`refund_no`、`idempotency_key`、`merchant_refund_no` 均有数据库唯一约束，记录 `payment_no`、`amount`、`request_fingerprint`（幂等内容摘要）、`status`（`SUCCEEDED`）和 `created_at`。
 
 通知事件表 `payment_notification_events`：`event_id` 有数据库唯一约束，记录 `payment_no`、`result`、`occurred_at`、通知内容摘要 `payload_hash` 和处理时间 `processed_at`，用于事件幂等与冲突检测。
+
+商户通知任务表 `merchant_notification_tasks`：`payment_no` 有数据库唯一约束（每个支付单最多一条任务），记录 `notify_url`、固定通知内容 `payload`、`status`（`PENDING` / `SUCCESS` / `FAILED`）、`attempt_count`、`next_attempt_at`、`last_error`、`succeeded_at`、`created_at` 和 `updated_at`。
 
 对账批次表 `payment_reconciliation_batches`：`batch_no` 唯一，`channel` + `accounting_date` 组合唯一（同一渠道同一账务日期只能有一个批次），记录请求内容摘要 `request_fingerprint`（对排序后的明细做 SHA-256，与明细顺序无关）、`total_count`、`matched_count`、`discrepancy_count` 和 `created_at`；批次处理状态（`PROCESSING` / `COMPLETED`）与待处理/已处理差异数量由明细的处理结果实时推导，不冗余存储。
 

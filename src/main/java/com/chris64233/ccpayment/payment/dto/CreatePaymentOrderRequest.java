@@ -22,6 +22,10 @@ public record CreatePaymentOrderRequest(
 
         @NotBlank(message = "币种不能为空")
         @Pattern(regexp = "^[A-Z]{3}$", message = "币种必须是三位大写字母")
-        String currency
+        String currency,
+
+        @Size(max = 512, message = "通知地址长度不能超过 512 个字符")
+        @Pattern(regexp = "^https?://\\S+$", message = "通知地址必须是合法的 HTTP 或 HTTPS 地址")
+        String notifyUrl
 ) {
 }

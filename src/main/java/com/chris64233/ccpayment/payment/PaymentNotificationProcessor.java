@@ -4,7 +4,10 @@ import com.chris64233.ccpayment.payment.dto.PaymentNotificationRequest;
 import com.chris64233.ccpayment.payment.dto.PaymentOrderResponse;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
+import tools.jackson.databind.ObjectMapper;
 
+import java.time.Clock;
+import java.time.Instant;
 import java.util.Optional;
 
 @Component
@@ -12,11 +15,20 @@ public class PaymentNotificationProcessor {
 
     private final PaymentOrderRepository orderRepository;
     private final PaymentNotificationEventRepository eventRepository;
+    private final MerchantNotificationTaskRepository taskRepository;
+    private final ObjectMapper objectMapper;
+    private final Clock clock;
 
     public PaymentNotificationProcessor(PaymentOrderRepository orderRepository,
-                                        PaymentNotificationEventRepository eventRepository) {
+                                        PaymentNotificationEventRepository eventRepository,
+                                        MerchantNotificationTaskRepository taskRepository,
+                                        ObjectMapper objectMapper,
+                                        Clock clock) {
         this.orderRepository = orderRepository;
         this.eventRepository = eventRepository;
+        this.taskRepository = taskRepository;
+        this.objectMapper = objectMapper;
+        this.clock = clock;
     }
 
     @Transactional
@@ -41,6 +53,14 @@ public class PaymentNotificationProcessor {
         }
         if (status == PaymentOrderStatus.PENDING) {
             order.applyResult(request.result());
+            if (order.getNotifyUrl() != null) {
+                // 首次从待支付进入终态时，同事务生成商户通知投递任务
+                taskRepository.saveAndFlush(new MerchantNotificationTask(
+                        order.getPaymentNo(),
+                        order.getNotifyUrl(),
+                        buildPayload(order, request),
+                        Instant.now(clock)));
+            }
         } else if (status == PaymentOrderStatus.CLOSED
                 || status != request.result().toStatus()) {
             // CLOSED 收到任何支付结果、或终态收到相反结果，均不允许
@@ -52,5 +72,17 @@ public class PaymentNotificationProcessor {
                 request.eventId(), order.getPaymentNo(), request.result(),
                 request.occurredAt(), payloadHash));
         return PaymentOrderResponse.from(orderRepository.save(order));
+    }
+
+    private String buildPayload(PaymentOrder order, PaymentNotificationRequest request) {
+        MerchantNotificationPayload payload = new MerchantNotificationPayload(
+                request.eventId(),
+                order.getPaymentNo(),
+                order.getMerchantOrderNo(),
+                request.result(),
+                order.getAmount(),
+                order.getCurrency(),
+                request.occurredAt());
+        return objectMapper.writeValueAsString(payload);
     }
 }
