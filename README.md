@@ -1,6 +1,6 @@
 # cc-payment
 
-支付业务后端项目，当前提供支付单的创建、查询、关闭、退款、支付争议处理、支付结果通知（渠道回调）、商户支付结果通知（出站投递）以及支付渠道对账能力。
+支付业务后端项目，当前提供支付单的创建、查询、关闭、退款、退款额度冻结、支付争议处理、支付结果通知（渠道回调）、商户支付结果通知（出站投递）以及支付渠道对账能力。
 
 ## 开发环境
 
@@ -73,7 +73,7 @@
 - 仅 `SUCCESS` 和 `PARTIALLY_REFUNDED` 状态的支付单允许退款；`PENDING`、`FAILED`、`CLOSED`、`REFUNDED` 状态返回 `409 PAYMENT_ORDER_NOT_REFUNDABLE`。
 - 退款受理成功后返回 `201` 及退款单 JSON（`refundNo`、`merchantRefundNo`、`paymentNo`、`amount`、`status`、`createdAt`），退款单状态记为 `SUCCEEDED`。
 - 每次退款成功后累加支付单的 `refundedAmount`：累计金额小于原支付金额时支付单状态变为 `PARTIALLY_REFUNDED`，等于原支付金额时变为 `REFUNDED`。
-- 累计退款金额不允许超过原支付金额，超出时返回 `409 REFUND_AMOUNT_EXCEEDED`；对同一支付单的并发退款通过行级悲观锁串行化，只允许余额充足的请求成功，不会超额也不会丢失更新。
+- 累计退款金额不允许超过原支付金额，超出时返回 `409 REFUND_AMOUNT_EXCEEDED`；可退款余额同时被待处理的退款额度冻结占用，即 `累计退款金额 + 全部待处理冻结金额 + 本次退款金额` 也不能超过原支付金额（详见“退款额度冻结”）；对同一支付单的并发退款通过行级悲观锁串行化，只允许余额充足的请求成功，不会超额也不会丢失更新。
 - 支付单存在待处理（`PENDING`）争议期间不能发起普通退款，返回 `409 PAYMENT_ORDER_DISPUTE_PENDING`；争议处理完成后按处理结果恢复或终止退款能力，详见“支付争议”。
 - 幂等语义：同一 `Idempotency-Key`、相同支付单且请求内容一致时，返回第一次创建的退款单，不重复累加退款金额；同一幂等键对应的支付单或请求内容不一致时返回 `409 IDEMPOTENCY_KEY_CONFLICT`。幂等键与商户退款单号均有数据库唯一约束兜底。
 - 商户退款单号重复返回 `409 DUPLICATE_MERCHANT_REFUND_NO`；支付单不存在返回 `404 PAYMENT_ORDER_NOT_FOUND`；参数不合法返回 `400 VALIDATION_ERROR`；缺少幂等键返回 `400 MISSING_IDEMPOTENCY_KEY`。
@@ -147,6 +147,71 @@
   - 商户胜诉：支付单金额不变，可继续普通退款；普通退款仍受累计金额不能超过原支付金额等既有规则约束。
   - 用户胜诉：争议强制退款已消费当前全部剩余可退款金额，支付单变为 `REFUNDED`，普通退款会按既有规则返回 `409 PAYMENT_ORDER_NOT_REFUNDABLE`。
 - 商户胜诉关闭争议后，如支付单仍为 `SUCCESS` / `PARTIALLY_REFUNDED` 且仍有可退款金额，可以再次创建新的争议。
+
+### 退款额度冻结
+
+退款额度冻结用于为已支付或部分退款的支付单预占退款额度：待处理（`PENDING`）的冻结与既有退款共同占用可退款余额，保证 `累计退款金额 + 全部待处理冻结金额` 始终不超过原支付金额。
+
+#### 创建冻结
+
+`POST /api/payment-orders/{paymentNo}/refund-freezes`
+
+- 请求体：
+
+      {"externalFreezeNo": "FRZ20260927001", "amount": 40.00, "reason": "风控审核冻结"}
+
+- 字段说明：`externalFreezeNo` 为外部冻结号，全局唯一；`amount` 为冻结金额，必须大于 0 且最多两位小数；`reason` 为冻结原因。`externalFreezeNo` 最长 64 个字符，`reason` 最长 200 个字符，均不能为空；不合法返回 `400 VALIDATION_ERROR`。
+- 创建前提（任一不满足都不会写入数据）：
+  - 支付单必须存在，否则返回 `404 PAYMENT_ORDER_NOT_FOUND`。
+  - 支付单状态必须为 `SUCCESS` 或 `PARTIALLY_REFUNDED`，其他状态返回 `409 FREEZE_PAYMENT_ORDER_NOT_FREEZABLE`。
+  - `累计退款金额 + 全部待处理冻结金额 + 本次冻结金额` 不能超过原支付金额，超出时返回 `409 FREEZE_AMOUNT_EXCEEDED`。
+- 成功返回 `201` 及冻结详情 JSON（字段同“查询冻结详情”），初始状态为 `PENDING`；冻结只预占额度，不改变支付单的 `refundedAmount` 与状态。
+- 幂等语义（以 `externalFreezeNo` 为幂等键）：
+  - 相同 `externalFreezeNo` 且冻结内容（关联支付单、金额、原因）完全一致的重复提交，直接返回第一次创建的冻结，不新增数据，统一返回 `201`。
+  - 相同 `externalFreezeNo` 但内容发生任何变化（不同支付单、不同金额或不同原因）时返回 `409 FREEZE_CONTENT_CONFLICT`，已保存结果不变。
+  - `externalFreezeNo` 有数据库唯一约束兜底，配合支付单行级悲观锁，并发重复请求只会保存一条冻结记录。
+
+#### 处理冻结
+
+`POST /api/refund-freezes/{externalFreezeNo}/resolution`
+
+- 请求体：
+
+      {"action": "REFUND", "resolvedBy": "operator-a", "resolutionNote": "风控审核完成，确认退款"}
+
+- 字段说明：`action` 为处理方式，仅允许 `RELEASE`（释放）/ `REFUND`（执行退款）；`resolvedBy` 为处理人（必填，最长 64 字符）；`resolutionNote` 为处理说明（必填，最长 200 字符）；不合法返回 `400 VALIDATION_ERROR`。
+- 冻结不存在返回 `404 FREEZE_NOT_FOUND`；只有 `PENDING` 状态的冻结可以处理，待处理冻结只能完成一次终态处理。
+- 释放（`RELEASE`）：只解除额度占用（状态变为 `RELEASED`），不生成退款，支付单金额与状态不变，记录处理人、处理说明和处理时间。
+- 执行退款（`REFUND`）：在**同一个数据库事务**中：
+  1. 按冻结金额生成一笔状态为 `SUCCEEDED` 的退款单（系统生成 `refundNo` 与商户退款单号）；
+  2. 将该笔退款金额累加到支付单的 `refundedAmount`，并把支付单状态同步更新为 `PARTIALLY_REFUNDED` 或 `REFUNDED`；
+  3. 终结冻结（状态变为 `EXECUTED`），记录处理人、处理说明、处理时间以及生成的退款单号。
+  - 执行前会按支付单最新数据复查 `累计退款金额 + 冻结金额` 不超过原支付金额，超出时返回 `409 FREEZE_AMOUNT_EXCEEDED`，冻结保持 `PENDING`。
+  - 上述任意一步失败都会整体回滚，不会留下已终结的冻结、孤立的退款单或支付单的部分更新；事务通过支付单和冻结行级悲观锁串行化，释放与执行退款的并发竞争只有一个成功。
+- 重复处理语义：
+  - 冻结处理完成后不能修改。处理方式、处理人、处理说明完全一致的重复提交直接返回第一次的结果，不重复写入，执行退款的场景不会重复生成退款。
+  - 处理方式、处理人或处理说明任一发生变化时返回 `409 FREEZE_RESOLUTION_CONFLICT`，已保存结果不变。
+
+#### 查询冻结详情
+
+`GET /api/refund-freezes/{externalFreezeNo}`
+
+- 成功返回 `200` 及冻结 JSON；不存在返回 `404 FREEZE_NOT_FOUND`。字段包括：
+  - `externalFreezeNo`：外部冻结号
+  - `paymentNo`：关联支付单号
+  - `amount` / `reason`：冻结金额与原因
+  - `status`：冻结状态，`PENDING`（待处理）/ `RELEASED`（已释放）/ `EXECUTED`（已执行退款）
+  - `action`：处理方式，未处理时为 `null`，处理后为 `RELEASE` / `REFUND`
+  - `resolvedBy`、`resolutionNote`、`resolvedAt`：处理人、处理说明、处理时间，未处理时均为 `null`
+  - `createdAt`：冻结创建时间
+  - `paymentOrder`：关联支付单信息（`paymentNo`、`merchantOrderNo`、`amount`、`refundedAmount`、`currency`、`status`），始终反映支付单当前最新状态
+  - `refund`：执行退款时生成的退款单信息（`refundNo`、`merchantRefundNo`、`amount`、`status`、`createdAt`）；待处理或已释放时为 `null`
+
+#### 冻结与退款的关系
+
+- 待处理冻结不阻止普通退款，但与既有退款共同占用可退款余额：普通退款按 `累计退款金额 + 全部待处理冻结金额 + 本次退款金额 ≤ 原支付金额` 校验，超出返回 `409 REFUND_AMOUNT_EXCEEDED`。
+- 冻结释放后，其占用的额度立即恢复，可用于普通退款或新的冻结。
+- 冻结执行退款后，冻结金额转化为实际退款，计入支付单 `refundedAmount`，不再额外占用额度。
 
 ### 支付结果通知（渠道回调）
 
@@ -318,6 +383,8 @@
 退款单表 `payment_refunds`：`refund_no`、`idempotency_key`、`merchant_refund_no` 均有数据库唯一约束，记录 `payment_no`、`amount`、`request_fingerprint`（幂等内容摘要）、`status`（`SUCCEEDED`）和 `created_at`。
 
 争议表 `payment_disputes`：`external_dispute_no` 有数据库唯一约束（外部争议号全局唯一，兼作创建幂等键），记录关联支付单 `payment_no`、争议原因 `dispute_reason`、争议说明 `dispute_note`、创建内容摘要 `request_fingerprint`（用于重复提交的内容一致性判断）、争议状态 `status`（`PENDING` / `MERCHANT_WON` / `USER_WON`）以及处理结果（`resolved_by`、`resolution_note`、`resolved_at`）；用户胜诉时 `refund_no` 记录同一事务中生成的强制退款单号，商户胜诉或待处理时为 `NULL`。另含 `created_at`、`updated_at`。同一支付单至多一个 `PENDING` 争议由应用层加锁检查保证。
+
+退款冻结表 `payment_refund_freezes`：`external_freeze_no` 有数据库唯一约束（外部冻结号全局唯一，兼作创建幂等键），记录关联支付单 `payment_no`、冻结金额 `amount`、冻结原因 `freeze_reason`、创建内容摘要 `request_fingerprint`（用于重复提交的内容一致性判断）、冻结状态 `status`（`PENDING` / `RELEASED` / `EXECUTED`）以及处理结果（`resolved_by`、`resolution_note`、`resolved_at`）；执行退款时 `refund_no` 记录同一事务中生成的退款单号，释放或待处理时为 `NULL`。另含 `created_at`、`updated_at`。`累计退款金额 + 全部 PENDING 冻结金额 ≤ 原支付金额` 的不变量由支付单行级悲观锁串行化保证。
 
 通知事件表 `payment_notification_events`：`event_id` 有数据库唯一约束，记录 `payment_no`、`result`、`occurred_at`、通知内容摘要 `payload_hash` 和处理时间 `processed_at`，用于事件幂等与冲突检测。
 

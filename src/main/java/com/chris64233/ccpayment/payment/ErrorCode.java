@@ -31,6 +31,11 @@ public enum ErrorCode {
     DISPUTE_CONTENT_CONFLICT(HttpStatus.CONFLICT, "同一外部争议号对应的争议内容不一致"),
     DISPUTE_RESOLUTION_CONFLICT(HttpStatus.CONFLICT, "争议已处理，处理内容与已保存结果不一致"),
     PAYMENT_ORDER_DISPUTE_PENDING(HttpStatus.CONFLICT, "支付单存在待处理争议，暂不允许发起退款"),
+    FREEZE_NOT_FOUND(HttpStatus.NOT_FOUND, "退款冻结不存在"),
+    FREEZE_PAYMENT_ORDER_NOT_FREEZABLE(HttpStatus.CONFLICT, "当前支付单状态不允许创建退款冻结"),
+    FREEZE_AMOUNT_EXCEEDED(HttpStatus.CONFLICT, "累计退款金额与待处理冻结金额之和超过原支付金额"),
+    FREEZE_CONTENT_CONFLICT(HttpStatus.CONFLICT, "同一外部冻结号对应的冻结内容不一致"),
+    FREEZE_RESOLUTION_CONFLICT(HttpStatus.CONFLICT, "冻结已处理，处理内容与已保存结果不一致"),
     INTERNAL_ERROR(HttpStatus.INTERNAL_SERVER_ERROR, "系统内部错误");
 
     private final HttpStatus status;
