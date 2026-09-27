@@ -4,9 +4,11 @@ import com.chris64233.ccpayment.payment.dispute.PaymentDisputeRepository;
 import com.chris64233.ccpayment.payment.dispute.PaymentDisputeStatus;
 import com.chris64233.ccpayment.payment.dto.CreateRefundRequest;
 import com.chris64233.ccpayment.payment.dto.PaymentRefundResponse;
+import com.chris64233.ccpayment.payment.freeze.PaymentRefundFreezeRepository;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.math.BigDecimal;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -16,13 +18,16 @@ public class PaymentRefundProcessor {
     private final PaymentOrderRepository orderRepository;
     private final PaymentRefundRepository refundRepository;
     private final PaymentDisputeRepository disputeRepository;
+    private final PaymentRefundFreezeRepository freezeRepository;
 
     public PaymentRefundProcessor(PaymentOrderRepository orderRepository,
                                   PaymentRefundRepository refundRepository,
-                                  PaymentDisputeRepository disputeRepository) {
+                                  PaymentDisputeRepository disputeRepository,
+                                  PaymentRefundFreezeRepository freezeRepository) {
         this.orderRepository = orderRepository;
         this.refundRepository = refundRepository;
         this.disputeRepository = disputeRepository;
+        this.freezeRepository = freezeRepository;
     }
 
     @Transactional
@@ -44,7 +49,10 @@ public class PaymentRefundProcessor {
         if (!order.isRefundable()) {
             throw new PaymentException(ErrorCode.PAYMENT_ORDER_NOT_REFUNDABLE);
         }
-        if (order.getRefundedAmount().add(request.amount()).compareTo(order.getAmount()) > 0) {
+        // 待处理冻结与既有退款共同占用可退款余额
+        BigDecimal occupied = order.getRefundedAmount()
+                .add(freezeRepository.sumPendingAmountByPaymentNo(paymentNo));
+        if (occupied.add(request.amount()).compareTo(order.getAmount()) > 0) {
             throw new PaymentException(ErrorCode.REFUND_AMOUNT_EXCEEDED);
         }
 
